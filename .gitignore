@@ -1,0 +1,6 @@
+.python-version
+*.csv
+*.txt
+*.xlsx
+.env
+__pycache__/
