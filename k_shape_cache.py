@@ -2,6 +2,8 @@ import pandas as pd
 import yfinance as yf
 import os
 from datetime import datetime
+from tslearn.utils import to_time_series_dataset
+import numpy as np
 
 from k_shape import StockKShapeClustering  # Assuming this is your clustering
 
@@ -179,6 +181,115 @@ class StockKShapeClusteringWithCache(StockKShapeClustering):
             print(f"Successfully loaded data for {len(self.stock_data.columns)} stocks from cache")
             
         return self.stock_data
+    
+    def prepare_features(self, feature_type='returns', window_size=20):
+            """
+            Prepare time series features for clustering
+            
+            Parameters:
+            -----------
+            feature_type : str
+                Type of features to extract:
+                - 'returns': Daily returns
+                - 'normalized_prices': Normalized price series
+                - 'ma_relative': Price relative to moving average
+                - 'volatility': Rolling volatility
+            window_size : int
+                Window size for rolling calculations
+            """
+            if self.stock_data is None:
+                raise ValueError("No stock data available. Run fetch_stock_data first.")
+                
+            features = {}
+            skipped_tickers = []
+            
+            for ticker in self.stock_data.columns:
+                prices = self.stock_data[ticker]
+                
+                # Skip if prices series is empty or all NaN
+                if prices.empty or prices.isna().all():
+                    print(f"Skipping {ticker}: Empty or all NaN price data")
+                    skipped_tickers.append(ticker)
+                    continue
+                
+                try:
+                    if feature_type == 'returns':
+                        # Daily returns
+                        feature_series = prices.pct_change().dropna()
+                        
+                    elif feature_type == 'normalized_prices':
+                        # Normalize prices to start at 1
+                        if prices.iloc[0] == 0 or pd.isna(prices.iloc[0]):
+                            print(f"Skipping {ticker}: First price is 0 or NaN, cannot normalize")
+                            skipped_tickers.append(ticker)
+                            continue
+                        feature_series = prices / prices.iloc[0]
+                        
+                    elif feature_type == 'ma_relative':
+                        # Price relative to moving average
+                        ma = prices.rolling(window=window_size).mean()
+                        feature_series = (prices / ma - 1).dropna()
+                        
+                    elif feature_type == 'volatility':
+                        # Rolling volatility
+                        returns = prices.pct_change()
+                        feature_series = returns.rolling(window=window_size).std().dropna()
+                        
+                    else:
+                        raise ValueError(f"Unknown feature_type: {feature_type}")
+                    
+                    # Check if resulting feature series is empty, all NaN, or has insufficient data
+                    if feature_series.empty or feature_series.isna().all() or len(feature_series) < 10:
+                        print(f"Skipping {ticker}: Insufficient valid data after {feature_type} calculation")
+                        skipped_tickers.append(ticker)
+                        continue
+                    
+                    # Check for infinite values
+                    if np.isinf(feature_series).any():
+                        print(f"Skipping {ticker}: Contains infinite values in {feature_type}")
+                        skipped_tickers.append(ticker)
+                        continue
+                        
+                    features[ticker] = feature_series
+                    
+                except Exception as e:
+                    print(f"Skipping {ticker}: Error calculating {feature_type} - {str(e)}")
+                    skipped_tickers.append(ticker)
+                    continue
+            
+            if not features:
+                print("WARNING: No valid features could be calculated for any ticker")
+                # Return empty arrays but don't crash
+                self.features = to_time_series_dataset([])
+                return pd.DataFrame()
+            
+            # Convert to DataFrame and ensure all series have same length
+            features_df = pd.DataFrame(features).dropna()
+            
+            # Check if any columns became empty after alignment
+            empty_cols = features_df.columns[features_df.isna().all()].tolist()
+            if empty_cols:
+                print(f"Removing tickers with empty features after alignment: {empty_cols}")
+                features_df = features_df.drop(columns=empty_cols)
+                skipped_tickers.extend(empty_cols)
+            
+            if features_df.empty:
+                print("WARNING: No valid aligned features remain after processing")
+                # Return empty arrays but don't crash
+                self.features = to_time_series_dataset([])
+                return pd.DataFrame()
+            
+            # Convert to time series dataset format for tslearn
+            self.features = to_time_series_dataset([features_df[col].values for col in features_df.columns])
+            
+            # Store valid tickers for later use
+            self.valid_tickers = list(features_df.columns)
+            
+            if skipped_tickers:
+                print(f"Skipped {len(skipped_tickers)} tickers: {skipped_tickers}")
+            
+            print(f"Prepared {feature_type} features for {len(features_df.columns)} tickers with shape: {self.features.shape}")
+            return features_df
 
 # Usage functions
 def build_stock_cache(ticker_file='ticker_symbols_only.txt', period='1y'):
@@ -192,6 +303,11 @@ def build_stock_cache(ticker_file='ticker_symbols_only.txt', period='1y'):
     # Build cache
     cache = StockDataCache()
     cache.build_cache(tickers, period=period)
+    
+    # Convert index to datetime with UTC
+    cache.data.index = pd.to_datetime(cache.data.index, utc=True)
+
+    cache.data = cache.data.resample('1m').last()
     
     return cache
 
@@ -218,6 +334,8 @@ def run_clustering_with_cache(sample_size=100, n_clusters=6):
     
     # Fetch data from cache
     stock_data = clustering.fetch_stock_data_from_cache(sample_tickers)
+    
+    import ipdb;ipdb.set_trace()
     
     if stock_data.empty:
         print("No data available for clustering")
@@ -320,8 +438,8 @@ def run_clustering_with_cache(sample_size=100, n_clusters=6):
 if __name__ == "__main__":
     # Step 1: Build cache (run once)
     print("=== BUILDING CACHE ===")
-    cache = build_stock_cache('nasdaq_screener.csv', period='2mo')
+    cache = build_stock_cache('nasdaq_screener.csv', period='1y')
     
     # Step 2: Run clustering (run multiple times with different samples)
     print("\n=== RUNNING CLUSTERING ===")
-    clustering, results, performance = run_clustering_with_cache(sample_size=3640, n_clusters=10)
+    clustering, results, performance = run_clustering_with_cache(sample_size=3640, n_clusters=6)
