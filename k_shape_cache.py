@@ -356,6 +356,8 @@ def run_clustering_with_cache(sample_size=100, n_clusters=6):
     
     # Analyze performance
     print("\nAnalyzing cluster performance...")
+
+def analyze_cluster(clustering, results, performance, n_clusters=6):
     try:
         performance = clustering.analyze_cluster_performance()
         print("\nCluster Performance Analysis:")
@@ -440,6 +442,11 @@ if __name__ == "__main__":
     print("=== BUILDING CACHE ===")
     cache = build_stock_cache('nasdaq_screener.csv', period='1y')
     
+    n_clusters = 6
+    
     # Step 2: Run clustering (run multiple times with different samples)
     print("\n=== RUNNING CLUSTERING ===")
-    clustering, results, performance = run_clustering_with_cache(sample_size=3640, n_clusters=6)
+    clustering, results, performance = run_clustering_with_cache(sample_size=3640, n_clusters=n_clusters)
+
+    print("\n=== ANALYZING CLUSTERS ===")
+    analyze_cluster(clustering, results, performance, n_clusters)

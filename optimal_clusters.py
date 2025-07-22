@@ -7,6 +7,8 @@ from k_shape_cache import StockKShapeClusteringWithCache, build_stock_cache
 
 import random
 
+from k_shape_cache import analyze_cluster
+
 
 
 def find_optimal_clusters_for_outperformance(clustering_class, stock_data, max_clusters=10, min_clusters=4):
@@ -304,6 +306,10 @@ def run_optimal_cluster_analysis(sample_size=100, max_clusters=10, period='1y'):
 if __name__ == "__main__":
     optimal_k, optimization_results, final_results = run_optimal_cluster_analysis(
         sample_size=3640, 
-        max_clusters=20, 
+        max_clusters=25, 
         period='1y'
     )
+    
+    clustering, results, performance = final_results
+    
+    analyze_cluster(clustering, results, performance, n_clusters=optimal_k)
