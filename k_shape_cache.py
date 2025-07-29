@@ -2,19 +2,16 @@ import pandas as pd
 import yfinance as yf
 import os
 from datetime import datetime
-from tslearn.utils import to_time_series_dataset
-import numpy as np
-
-from k_shape import StockKShapeClustering  # Assuming this is your clustering
 
 class StockDataCache:
-    def __init__(self, cache_file='stock_data_cache_nq.csv'):
+    def __init__(self, cache_file='stock_data_cache.csv'):
         self.cache_file = cache_file
+        self.metadata_file = cache_file.replace('.csv', '_metadata.csv')
         self.data = None
         
-    def build_cache(self, tickers, period='1y', force_rebuild=False):
+    def fetch_and_cache_data(self, tickers, period='1y', force_rebuild=False):
         """
-        Build cache of stock data for all tickers
+        Fetch stock data from Yahoo Finance and cache it
         
         Parameters:
         -----------
@@ -29,7 +26,7 @@ class StockDataCache:
             print(f"Cache file {self.cache_file} already exists. Use force_rebuild=True to rebuild.")
             return self.load_cache()
         
-        print(f"Building cache for {len(tickers)} tickers...")
+        print(f"Fetching and caching data for {len(tickers)} tickers...")
         
         stock_data = {}
         successful_tickers = []
@@ -61,6 +58,8 @@ class StockDataCache:
         # Create DataFrame and save
         if stock_data:
             df = pd.DataFrame(stock_data)
+            # Convert index to datetime with UTC
+            df.index = pd.to_datetime(df.index, utc=True)
             df.to_csv(self.cache_file)
             print(f"Cache saved to {self.cache_file}")
             print(f"Successfully cached {len(successful_tickers)} tickers")
@@ -78,7 +77,7 @@ class StockDataCache:
             }
             
             metadata_df = pd.DataFrame([metadata])
-            metadata_df.to_csv(self.cache_file.replace('.csv', '_metadata.csv'), index=False)
+            metadata_df.to_csv(self.metadata_file, index=False)
             
             self.data = df
             return df
@@ -91,7 +90,7 @@ class StockDataCache:
         Load cached stock data
         """
         if not os.path.exists(self.cache_file):
-            print(f"Cache file {self.cache_file} does not exist. Build cache first.")
+            print(f"Cache file {self.cache_file} does not exist. Use fetch_and_cache_data() first.")
             return pd.DataFrame()
         
         print(f"Loading cache from {self.cache_file}")
@@ -106,7 +105,7 @@ class StockDataCache:
         if self.data is None:
             self.load_cache()
         
-        return list(self.data.columns) if self.data is not None else []
+        return list(self.data.columns) if self.data is not None and not self.data.empty else []
     
     def get_ticker_data(self, ticker):
         """
@@ -115,331 +114,179 @@ class StockDataCache:
         if self.data is None:
             self.load_cache()
         
-        if ticker in self.data.columns:
+        if not self.data.empty and ticker in self.data.columns:
             return self.data[ticker].dropna()
         else:
             print(f"Ticker {ticker} not found in cache")
             return pd.Series()
     
-    def get_sample_data(self, tickers):
+    def get_data(self, tickers=None, start_date=None):
         """
-        Get data for a sample of tickers
+        Get stock data for specified tickers and date range
         
         Parameters:
         -----------
-        tickers : list
-            List of tickers to get data for
+        tickers : list, optional
+            List of tickers to get data for. If None, returns all available tickers
+        start_date : str or datetime-like, optional
+            Start date to filter data from (inclusive). If None, returns all available data
             
         Returns:
         --------
         pd.DataFrame
-            DataFrame with only the requested tickers that exist in cache
+            DataFrame with requested tickers and date range
         """
         if self.data is None:
             self.load_cache()
         
-        # Filter to only tickers that exist in cache
-        available_tickers = [t for t in tickers if t in self.data.columns]
-        missing_tickers = [t for t in tickers if t not in self.data.columns]
-        
-        if missing_tickers:
-            print(f"Warning: {len(missing_tickers)} tickers not found in cache: {missing_tickers}")
-        
-        if available_tickers:
-            return self.data[available_tickers].dropna()
-        else:
-            print("No requested tickers found in cache")
+        if self.data is None or self.data.empty:
+            print("No data available in cache")
             return pd.DataFrame()
-
-# Updated StockKShapeClustering class to use cache
-class StockKShapeClusteringWithCache(StockKShapeClustering):
-    def __init__(self, n_clusters=3, random_state=42, cache_file='stock_data_cache_nq.csv'):
-        super().__init__(n_clusters, random_state)
-        self.cache = StockDataCache(cache_file)
         
-    def fetch_stock_data_from_cache(self, tickers):
+        # Start with all data
+        result_data = self.data.copy()
+        
+        # Filter by tickers if specified
+        if tickers is not None:
+            available_tickers = [t for t in tickers if t in result_data.columns]
+            missing_tickers = [t for t in tickers if t not in result_data.columns]
+            
+            if missing_tickers:
+                print(f"Warning: {len(missing_tickers)} tickers not found in cache: {missing_tickers}")
+            
+            if available_tickers:
+                result_data = result_data[available_tickers]
+            else:
+                print("No requested tickers found in cache")
+                return pd.DataFrame()
+        
+        # Apply date filter if specified
+        if start_date is not None:
+            try:
+                # Convert start_date to pandas datetime if it's a string
+                if isinstance(start_date, str):
+                    start_date = pd.to_datetime(start_date)
+                
+                # Handle timezone issues
+                if hasattr(result_data.index, 'tz') and result_data.index.tz is not None:
+                    if start_date.tz is None:
+                        start_date = start_date.tz_localize(result_data.index.tz)
+                else:
+                    if hasattr(start_date, 'tz') and start_date.tz is not None:
+                        start_date = start_date.tz_localize(None)
+                
+                # Filter data from start_date onwards
+                result_data = result_data[result_data.index >= start_date]
+                
+                if result_data.empty:
+                    print(f"Warning: No data found after {start_date}")
+                else:
+                    print(f"Filtered data from {start_date} onwards: {result_data.shape[0]} dates")
+                    
+            except Exception as e:
+                print(f"Error parsing start_date '{start_date}': {e}")
+                print("Returning unfiltered data")
+        
+        # Drop rows where all values are NaN
+        result_data = result_data.dropna(how='all')
+        
+        return result_data
+    
+    def add_tickers(self, new_tickers, period='1y'):
         """
-        Fetch stock data from cache instead of API
+        Add new tickers to existing cache
         
         Parameters:
         -----------
-        tickers : list
-            List of stock tickers
+        new_tickers : list
+            List of new tickers to add
+        period : str
+            Time period for new data
         """
-        print("Fetching stock data from cache...")
+        if self.data is None:
+            self.load_cache()
         
-        # Load cache if not already loaded
-        if self.cache.data is None:
-            self.cache.load_cache()
-            
-        # Get data for requested tickers
-        self.stock_data = self.cache.get_sample_data(tickers)
+        existing_tickers = self.get_available_tickers()
+        tickers_to_fetch = [t for t in new_tickers if t not in existing_tickers]
         
-        if self.stock_data.empty:
-            print("No data available for requested tickers")
-        else:
-            print(f"Successfully loaded data for {len(self.stock_data.columns)} stocks from cache")
-            
-        return self.stock_data
-    
-    def prepare_features(self, feature_type='returns', window_size=20):
-            """
-            Prepare time series features for clustering
-            
-            Parameters:
-            -----------
-            feature_type : str
-                Type of features to extract:
-                - 'returns': Daily returns
-                - 'normalized_prices': Normalized price series
-                - 'ma_relative': Price relative to moving average
-                - 'volatility': Rolling volatility
-            window_size : int
-                Window size for rolling calculations
-            """
-            if self.stock_data is None:
-                raise ValueError("No stock data available. Run fetch_stock_data first.")
+        if not tickers_to_fetch:
+            print("All requested tickers already exist in cache")
+            return self.data
+        
+        print(f"Adding {len(tickers_to_fetch)} new tickers to cache...")
+        
+        # Fetch new data
+        new_data = {}
+        successful_tickers = []
+        failed_tickers = []
+        
+        for ticker in tickers_to_fetch:
+            try:
+                stock = yf.Ticker(ticker)
+                hist = stock.history(period=period)
                 
-            features = {}
-            skipped_tickers = []
-            
-            for ticker in self.stock_data.columns:
-                prices = self.stock_data[ticker]
-                
-                # Skip if prices series is empty or all NaN
-                if prices.empty or prices.isna().all():
-                    print(f"Skipping {ticker}: Empty or all NaN price data")
-                    skipped_tickers.append(ticker)
-                    continue
-                
-                try:
-                    if feature_type == 'returns':
-                        # Daily returns
-                        feature_series = prices.pct_change().dropna()
-                        
-                    elif feature_type == 'normalized_prices':
-                        # Normalize prices to start at 1
-                        if prices.iloc[0] == 0 or pd.isna(prices.iloc[0]):
-                            print(f"Skipping {ticker}: First price is 0 or NaN, cannot normalize")
-                            skipped_tickers.append(ticker)
-                            continue
-                        feature_series = prices / prices.iloc[0]
-                        
-                    elif feature_type == 'ma_relative':
-                        # Price relative to moving average
-                        ma = prices.rolling(window=window_size).mean()
-                        feature_series = (prices / ma - 1).dropna()
-                        
-                    elif feature_type == 'volatility':
-                        # Rolling volatility
-                        returns = prices.pct_change()
-                        feature_series = returns.rolling(window=window_size).std().dropna()
-                        
+                if not hist.empty and 'Close' in hist.columns:
+                    close_data = hist['Close']
+                    if not close_data.empty and close_data.notna().sum() > 10:
+                        new_data[ticker] = close_data
+                        successful_tickers.append(ticker)
                     else:
-                        raise ValueError(f"Unknown feature_type: {feature_type}")
+                        failed_tickers.append(ticker)
+                else:
+                    failed_tickers.append(ticker)
                     
-                    # Check if resulting feature series is empty, all NaN, or has insufficient data
-                    if feature_series.empty or feature_series.isna().all() or len(feature_series) < 10:
-                        print(f"Skipping {ticker}: Insufficient valid data after {feature_type} calculation")
-                        skipped_tickers.append(ticker)
-                        continue
-                    
-                    # Check for infinite values
-                    if np.isinf(feature_series).any():
-                        print(f"Skipping {ticker}: Contains infinite values in {feature_type}")
-                        skipped_tickers.append(ticker)
-                        continue
-                        
-                    features[ticker] = feature_series
-                    
-                except Exception as e:
-                    print(f"Skipping {ticker}: Error calculating {feature_type} - {str(e)}")
-                    skipped_tickers.append(ticker)
-                    continue
-            
-            if not features:
-                print("WARNING: No valid features could be calculated for any ticker")
-                # Return empty arrays but don't crash
-                self.features = to_time_series_dataset([])
-                return pd.DataFrame()
-            
-            # Convert to DataFrame and ensure all series have same length
-            features_df = pd.DataFrame(features).dropna()
-            
-            # Check if any columns became empty after alignment
-            empty_cols = features_df.columns[features_df.isna().all()].tolist()
-            if empty_cols:
-                print(f"Removing tickers with empty features after alignment: {empty_cols}")
-                features_df = features_df.drop(columns=empty_cols)
-                skipped_tickers.extend(empty_cols)
-            
-            if features_df.empty:
-                print("WARNING: No valid aligned features remain after processing")
-                # Return empty arrays but don't crash
-                self.features = to_time_series_dataset([])
-                return pd.DataFrame()
-            
-            # Convert to time series dataset format for tslearn
-            self.features = to_time_series_dataset([features_df[col].values for col in features_df.columns])
-            
-            # Store valid tickers for later use
-            self.valid_tickers = list(features_df.columns)
-            
-            if skipped_tickers:
-                print(f"Skipped {len(skipped_tickers)} tickers: {skipped_tickers}")
-            
-            print(f"Prepared {feature_type} features for {len(features_df.columns)} tickers with shape: {self.features.shape}")
-            return features_df
-
-# Usage functions
-def build_stock_cache(ticker_file='ticker_symbols_only.txt', period='1y'):
-    """
-    Build cache for all tickers in file
-    """
-    # Load tickers from file
-    tickers_df = pd.read_csv(ticker_file)
-    tickers = tickers_df.Symbol.to_list()
-    
-    # Build cache
-    cache = StockDataCache()
-    cache.build_cache(tickers, period=period)
-    
-    # Convert index to datetime with UTC
-    cache.data.index = pd.to_datetime(cache.data.index, utc=True)
-
-    cache.data = cache.data.resample('1m').last()
-    
-    return cache
-
-def run_clustering_with_cache(sample_size=100, n_clusters=6):
-    """
-    Run clustering using cached data
-    """
-    # Initialize clustering with cache
-    clustering = StockKShapeClusteringWithCache(n_clusters=n_clusters, random_state=42)
-    
-    # Get available tickers from cache
-    available_tickers = clustering.cache.get_available_tickers()
-    
-    if len(available_tickers) == 0:
-        print("No tickers available in cache. Build cache first.")
-        return None
-    
-    print(f"Available tickers in cache: {len(available_tickers)}")
-    
-    # Sample tickers
-    import random
-    sample_tickers = random.sample(available_tickers, min(sample_size, len(available_tickers)))
-    print(f"Sampling {len(sample_tickers)} tickers for clustering")
-    
-    # Fetch data from cache
-    stock_data = clustering.fetch_stock_data_from_cache(sample_tickers)
-    
-    import ipdb;ipdb.set_trace()
-    
-    if stock_data.empty:
-        print("No data available for clustering")
-        return None
-    
-    # Run clustering pipeline
-    print("\nPreparing features...")
-    features = clustering.prepare_features(feature_type='normalized_prices')
-    
-    print("Fitting clustering...")
-    labels = clustering.fit_clustering()
-    
-    print("Getting results...")
-    results = clustering.get_cluster_results()
-    
-    print(f"\nClustering Results:")
-    print(results)
-    
-    # Analyze performance
-    print("\nAnalyzing cluster performance...")
-    try:
-        performance = clustering.analyze_cluster_performance()
-        print("\nCluster Performance Analysis:")
-        print(performance[['Cluster', 'Count', 'Avg_Return', 'Avg_Volatility', 'Sharpe_Ratio']])
+            except Exception as e:
+                print(f"Error fetching {ticker}: {e}")
+                failed_tickers.append(ticker)
         
-        # Print average performance per cluster with stock lists
-        print("\nDetailed Cluster Analysis:")
-        for _, cluster_info in performance.iterrows():
-            cluster_num = cluster_info['Cluster']
-            stocks = cluster_info['Stocks']
-            print(f"\n--- Cluster {cluster_num} ({cluster_info['Count']} stocks) ---")
-            print(f"Stocks: {', '.join(stocks)}")
-            print(f"Average Return: {cluster_info['Avg_Return']:.4f} ({cluster_info['Avg_Return']*100:.2f}%)")
-            print(f"Average Volatility: {cluster_info['Avg_Volatility']:.4f} ({cluster_info['Avg_Volatility']*100:.2f}%)")
-            print(f"Sharpe Ratio: {cluster_info['Sharpe_Ratio']:.4f}")
-            print(f"Max Drawdown: {cluster_info['Max_Drawdown']:.4f} ({cluster_info['Max_Drawdown']*100:.2f}%)")
+        if new_data:
+            # Create DataFrame for new data
+            new_df = pd.DataFrame(new_data)
+            new_df.index = pd.to_datetime(new_df.index, utc=True)
             
-        # Calculate and print overall averages across all clusters
-        print(f"\n--- Overall Portfolio Averages ---")
-        print(f"Average Return: {performance['Avg_Return'].mean():.4f} ({performance['Avg_Return'].mean()*100:.2f}%)")
-        print(f"Average Volatility: {performance['Avg_Volatility'].mean():.4f} ({performance['Avg_Volatility'].mean()*100:.2f}%)")
-        print(f"Average Sharpe Ratio: {performance['Sharpe_Ratio'].mean():.4f}")
-        print(f"Average Max Drawdown: {performance['Max_Drawdown'].mean():.4f} ({performance['Max_Drawdown'].mean()*100:.2f}%)")
+            # Merge with existing data
+            if not self.data.empty:
+                self.data = pd.concat([self.data, new_df], axis=1, sort=True)
+            else:
+                self.data = new_df
+            
+            # Save updated cache
+            self.data.to_csv(self.cache_file)
+            print(f"Added {len(successful_tickers)} new tickers to cache")
+            
+            if failed_tickers:
+                print(f"Failed to add {len(failed_tickers)} tickers: {failed_tickers}")
         
-    except Exception as e:
-        print(f"Performance analysis failed: {e}")
-        performance = None
+        return self.data
     
-    # Visualize results
-    print("\nGenerating visualizations...")
-    try:
-        clustering.plot_clusters(feature_type='normalized_prices')
-        print("✅ Cluster visualization completed")
-    except Exception as e:
-        print(f"⚠️  Visualization failed: {e}")
-    
-    # Save results
-    from datetime import datetime
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # Save basic results
-    results.to_csv(f'clusters_{timestamp}.csv', index=False)
-    print(f"✅ Basic results saved to clusters_{timestamp}.csv")
-    
-    # Save detailed results with performance metrics
-    if performance is not None:
-        # Create detailed results by merging cluster results with performance
-        detailed_results = results.copy()
+    def get_cache_info(self):
+        """
+        Get information about the current cache
+        """
+        if self.data is None:
+            self.load_cache()
         
-        # Add performance metrics for each stock
-        perf_dict = {}
-        for _, cluster_info in performance.iterrows():
-            cluster_num = cluster_info['Cluster']
-            for stock in cluster_info['Stocks']:
-                perf_dict[stock] = {
-                    'Cluster_Avg_Return': cluster_info['Avg_Return'],
-                    'Cluster_Avg_Volatility': cluster_info['Avg_Volatility'],
-                    'Cluster_Sharpe_Ratio': cluster_info['Sharpe_Ratio'],
-                    'Cluster_Max_Drawdown': cluster_info['Max_Drawdown']
-                }
+        if self.data is None or self.data.empty:
+            return {"status": "empty", "tickers": 0, "date_range": None}
         
-        # Add performance columns
-        for col in ['Cluster_Avg_Return', 'Cluster_Avg_Volatility', 'Cluster_Sharpe_Ratio', 'Cluster_Max_Drawdown']:
-            detailed_results[col] = detailed_results['Ticker'].map(lambda x: perf_dict.get(x, {}).get(col, None))
+        info = {
+            "status": "loaded",
+            "tickers": len(self.data.columns),
+            "ticker_list": list(self.data.columns),
+            "date_range": {
+                "start": self.data.index.min().strftime('%Y-%m-%d'),
+                "end": self.data.index.max().strftime('%Y-%m-%d')
+            },
+            "total_records": self.data.shape[0] * self.data.shape[1],
+            "non_null_records": self.data.count().sum()
+        }
         
-        detailed_results.to_csv(f'detailed_clusters_{timestamp}.csv', index=False)
-        print(f"✅ Detailed results saved to detailed_clusters_{timestamp}.csv")
+        # Load metadata if available
+        if os.path.exists(self.metadata_file):
+            try:
+                metadata = pd.read_csv(self.metadata_file).iloc[0].to_dict()
+                info["metadata"] = metadata
+            except:
+                pass
         
-        # Save performance summary
-        performance_summary = performance[['Cluster', 'Count', 'Avg_Return', 'Avg_Volatility', 'Sharpe_Ratio', 'Max_Drawdown']].copy()
-        performance_summary.to_csv(f'cluster_performance_{timestamp}.csv', index=False)
-        print(f"✅ Performance summary saved to cluster_performance_{timestamp}.csv")
-    
-    print(f"\n🎉 CLUSTERING ANALYSIS COMPLETED!")
-    print(f"📊 {len(results)} stocks clustered into {n_clusters} clusters")
-    
-    return clustering, results, performance
-
-# Example usage
-if __name__ == "__main__":
-    # Step 1: Build cache (run once)
-    print("=== BUILDING CACHE ===")
-    cache = build_stock_cache('nasdaq_screener.csv', period='1y')
-    
-    # Step 2: Run clustering (run multiple times with different samples)
-    print("\n=== RUNNING CLUSTERING ===")
-    clustering, results, performance = run_clustering_with_cache(sample_size=3640, n_clusters=6)
+        return info

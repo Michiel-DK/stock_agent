@@ -6,23 +6,27 @@ from tslearn.clustering import KShape
 from tslearn.preprocessing import TimeSeriesScalerMeanVariance
 from tslearn.utils import to_time_series_dataset
 from sklearn.metrics import silhouette_score
-import yfinance as yf
-from datetime import datetime, timedelta
+from datetime import datetime
 import warnings
+import random
+
 warnings.filterwarnings('ignore')
 
 class StockKShapeClustering:
-    def __init__(self, n_clusters=3, random_state=42):
+    def __init__(self, cache, n_clusters=3, random_state=42):
         """
         Initialize K-Shape clustering for stock price analysis
         
         Parameters:
         -----------
+        cache : StockDataCache
+            Instance of StockDataCache for data access
         n_clusters : int
             Number of clusters to form
         random_state : int
             Random state for reproducibility
         """
+        self.cache = cache
         self.n_clusters = n_clusters
         self.random_state = random_state
         self.model = None
@@ -30,46 +34,36 @@ class StockKShapeClustering:
         self.stock_data = None
         self.features = None
         self.cluster_labels = None
+        self.valid_tickers = None
         
-    def fetch_stock_data(self, tickers, period='1y'):
+    def load_data(self, tickers=None, start_date=None):
         """
-        Fetch stock data from Yahoo Finance
+        Load stock data from cache
         
         Parameters:
         -----------
-        tickers : list
-            List of stock tickers
-        period : str
-            Time period for data ('1y', '2y', '5y', etc.)
+        tickers : list, optional
+            List of stock tickers. If None, uses all available tickers
+        start_date : str or datetime-like, optional
+            Start date to filter data from
         """
-        print("Fetching stock data...")
-        stock_data = {}
-        skipped_tickers = []
+        print(f"Loading stock data from cache...")
         
-        for ticker in tickers:
-            try:
-                stock = yf.Ticker(ticker)
-                hist = stock.history(period=period)
-                
-                # Only keep if we have valid Close data
-                if not hist.empty and 'Close' in hist.columns:
-                    close_data = hist['Close']
-                    if not close_data.empty and close_data.notna().sum() > 10:  # At least 10 valid prices
-                        stock_data[ticker] = close_data
-                    else:
-                        skipped_tickers.append(ticker)
-                else:
-                    skipped_tickers.append(ticker)
-                    
-            except Exception as e:
-                print(f"Error fetching {ticker}: {e}")
-                skipped_tickers.append(ticker)
-                
-        if skipped_tickers:
-            print(f"Skipped {len(skipped_tickers)} tickers with no/insufficient data")
+        if tickers is None:
+            available_tickers = self.cache.get_available_tickers()
+            if not available_tickers:
+                print("No tickers available in cache")
+                self.stock_data = pd.DataFrame()
+                return self.stock_data
+            tickers = available_tickers
+        
+        self.stock_data = self.cache.get_data(tickers=tickers, start_date=start_date)
+        
+        if self.stock_data.empty:
+            print("No data available for requested tickers and date range")
+        else:
+            print(f"Loaded data for {self.stock_data.shape[1]} stocks from {self.stock_data.index[0].strftime('%Y-%m-%d')} to {self.stock_data.index[-1].strftime('%Y-%m-%d')}")
             
-        self.stock_data = pd.DataFrame(stock_data).dropna()
-        print(f"Successfully fetched data for {len(self.stock_data.columns)} stocks")
         return self.stock_data
     
     def prepare_features(self, feature_type='returns', window_size=20):
@@ -87,8 +81,8 @@ class StockKShapeClustering:
         window_size : int
             Window size for rolling calculations
         """
-        if self.stock_data is None:
-            raise ValueError("No stock data available. Run fetch_stock_data first.")
+        if self.stock_data is None or self.stock_data.empty:
+            raise ValueError("No stock data available. Run load_data() first.")
             
         features = {}
         skipped_tickers = []
@@ -98,45 +92,33 @@ class StockKShapeClustering:
             
             # Skip if prices series is empty or all NaN
             if prices.empty or prices.isna().all():
-                print(f"Skipping {ticker}: Empty or all NaN price data")
                 skipped_tickers.append(ticker)
                 continue
             
             try:
                 if feature_type == 'returns':
-                    # Daily returns
                     feature_series = prices.pct_change().dropna()
                     
                 elif feature_type == 'normalized_prices':
-                    # Normalize prices to start at 1
                     if prices.iloc[0] == 0 or pd.isna(prices.iloc[0]):
-                        print(f"Skipping {ticker}: First price is 0 or NaN, cannot normalize")
                         skipped_tickers.append(ticker)
                         continue
                     feature_series = prices / prices.iloc[0]
                     
                 elif feature_type == 'ma_relative':
-                    # Price relative to moving average
                     ma = prices.rolling(window=window_size).mean()
                     feature_series = (prices / ma - 1).dropna()
                     
                 elif feature_type == 'volatility':
-                    # Rolling volatility
                     returns = prices.pct_change()
                     feature_series = returns.rolling(window=window_size).std().dropna()
                     
                 else:
                     raise ValueError(f"Unknown feature_type: {feature_type}")
                 
-                # Check if resulting feature series is empty, all NaN, or has insufficient data
-                if feature_series.empty or feature_series.isna().all() or len(feature_series) < 10:
-                    print(f"Skipping {ticker}: Insufficient valid data after {feature_type} calculation")
-                    skipped_tickers.append(ticker)
-                    continue
-                
-                # Check for infinite values
-                if np.isinf(feature_series).any():
-                    print(f"Skipping {ticker}: Contains infinite values in {feature_type}")
+                # Validation checks
+                if (feature_series.empty or feature_series.isna().all() or 
+                    len(feature_series) < 10 or np.isinf(feature_series).any()):
                     skipped_tickers.append(ticker)
                     continue
                     
@@ -149,58 +131,54 @@ class StockKShapeClustering:
         
         if not features:
             print("WARNING: No valid features could be calculated for any ticker")
-            # Return empty arrays but don't crash
             self.features = to_time_series_dataset([])
+            self.valid_tickers = []
             return pd.DataFrame()
         
         # Convert to DataFrame and ensure all series have same length
         features_df = pd.DataFrame(features).dropna()
         
-        # Check if any columns became empty after alignment
+        # Remove any columns that became empty after alignment
         empty_cols = features_df.columns[features_df.isna().all()].tolist()
         if empty_cols:
-            print(f"Removing tickers with empty features after alignment: {empty_cols}")
             features_df = features_df.drop(columns=empty_cols)
             skipped_tickers.extend(empty_cols)
         
         if features_df.empty:
             print("WARNING: No valid aligned features remain after processing")
-            # Return empty arrays but don't crash
             self.features = to_time_series_dataset([])
+            self.valid_tickers = []
             return pd.DataFrame()
         
         # Convert to time series dataset format for tslearn
         self.features = to_time_series_dataset([features_df[col].values for col in features_df.columns])
-        
-        # Store valid tickers for later use
         self.valid_tickers = list(features_df.columns)
         
         if skipped_tickers:
-            print(f"Skipped {len(skipped_tickers)} tickers: {skipped_tickers}")
+            print(f"Skipped {len(skipped_tickers)} tickers due to insufficient/invalid data")
         
-        print(f"Prepared {feature_type} features for {len(features_df.columns)} tickers with shape: {self.features.shape}")
+        print(f"Prepared {feature_type} features for {len(features_df.columns)} tickers")
         return features_df
     
     def find_optimal_clusters(self, max_clusters=10, min_clusters=2):
         """
         Find optimal number of clusters using silhouette score
-        
-        Parameters:
-        -----------
-        max_clusters : int
-            Maximum number of clusters to try
-        min_clusters : int
-            Minimum number of clusters to try
         """
-        if self.features is None:
-            raise ValueError("No features prepared. Run prepare_features first.")
+        if self.features is None or len(self.features) == 0:
+            raise ValueError("No features prepared. Run prepare_features() first.")
             
+        # Adjust max_clusters based on available data
+        max_possible_clusters = min(max_clusters, len(self.features))
+        if max_possible_clusters < min_clusters:
+            print(f"Not enough data for cluster optimization. Only {len(self.features)} samples available.")
+            return len(self.features), []
+        
         # Scale the features
         scaler = TimeSeriesScalerMeanVariance()
         scaled_features = scaler.fit_transform(self.features)
         
         silhouette_scores = []
-        cluster_range = range(min_clusters, max_clusters + 1)
+        cluster_range = range(min_clusters, max_possible_clusters + 1)
         
         print("Finding optimal number of clusters...")
         for n_clusters in cluster_range:
@@ -208,21 +186,11 @@ class StockKShapeClustering:
             cluster_labels = kshape.fit_predict(scaled_features)
             
             # Calculate silhouette score
-            # Reshape for silhouette calculation
             reshaped_features = scaled_features.reshape(scaled_features.shape[0], -1)
             score = silhouette_score(reshaped_features, cluster_labels)
             silhouette_scores.append(score)
             
             print(f"Clusters: {n_clusters}, Silhouette Score: {score:.3f}")
-        
-        # Plot silhouette scores
-        plt.figure(figsize=(10, 6))
-        plt.plot(cluster_range, silhouette_scores, 'bo-')
-        plt.xlabel('Number of Clusters')
-        plt.ylabel('Silhouette Score')
-        plt.title('Silhouette Score vs Number of Clusters')
-        plt.grid(True)
-        plt.show()
         
         # Find optimal number of clusters
         optimal_clusters = cluster_range[np.argmax(silhouette_scores)]
@@ -233,25 +201,15 @@ class StockKShapeClustering:
     def fit_clustering(self, scale_features=True):
         """
         Fit K-Shape clustering model
-        
-        Parameters:
-        -----------
-        scale_features : bool
-            Whether to scale features before clustering
         """
-        if self.features is None:
-            raise ValueError("No features prepared. Run prepare_features first.")
-            
-        # Check if we have any valid features
-        if len(self.features) == 0:
-            print("WARNING: No valid features available for clustering. Skipping clustering.")
+        if self.features is None or len(self.features) == 0:
+            print("WARNING: No valid features available for clustering")
             self.cluster_labels = np.array([])
             return self.cluster_labels
             
-        # Check if we have enough samples for the requested number of clusters
+        # Adjust number of clusters if necessary
         if len(self.features) < self.n_clusters:
-            print(f"WARNING: Only {len(self.features)} valid stocks, but {self.n_clusters} clusters requested.")
-            print(f"Reducing number of clusters to {len(self.features)}")
+            print(f"WARNING: Only {len(self.features)} samples, reducing clusters from {self.n_clusters} to {len(self.features)}")
             self.n_clusters = len(self.features)
             
         # Scale features if requested
@@ -278,44 +236,95 @@ class StockKShapeClustering:
         """
         Get clustering results as a DataFrame
         """
-        if self.cluster_labels is None:
-            raise ValueError("Model not fitted. Run fit_clustering first.")
-            
-        # Handle case where no clustering was performed due to insufficient data
-        if len(self.cluster_labels) == 0:
-            print("WARNING: No cluster results available - no valid stocks were clustered")
+        if self.cluster_labels is None or len(self.cluster_labels) == 0:
+            print("WARNING: No cluster results available")
             return pd.DataFrame(columns=['Ticker', 'Cluster'])
             
-        # Use valid_tickers if available, otherwise fallback to original logic
-        if hasattr(self, 'valid_tickers') and self.valid_tickers:
-            valid_tickers = self.valid_tickers
-        else:
-            # Fallback: use first N tickers where N = number of cluster labels
-            valid_tickers = self.stock_data.columns[:len(self.cluster_labels)]
+        if not self.valid_tickers:
+            print("WARNING: No valid tickers available")
+            return pd.DataFrame(columns=['Ticker', 'Cluster'])
             
         results = pd.DataFrame({
-            'Ticker': valid_tickers,
+            'Ticker': self.valid_tickers,
             'Cluster': self.cluster_labels
         })
         
         return results.sort_values('Cluster')
     
+    def analyze_cluster_performance(self):
+        """
+        Analyze performance characteristics of each cluster
+        """
+        if self.cluster_labels is None or len(self.cluster_labels) == 0:
+            raise ValueError("Model not fitted. Run fit_clustering() first.")
+            
+        if not self.valid_tickers:
+            print("WARNING: No valid tickers for performance analysis")
+            return pd.DataFrame()
+        
+        # Get returns data for valid tickers only
+        valid_stock_data = self.stock_data[self.valid_tickers]
+        returns = valid_stock_data.pct_change().dropna()
+        
+        cluster_stats = []
+        
+        for cluster in range(self.n_clusters):
+            cluster_indices = [i for i, label in enumerate(self.cluster_labels) if label == cluster]
+            cluster_stocks = [self.valid_tickers[i] for i in cluster_indices]
+            
+            if cluster_stocks:
+                cluster_returns = returns[cluster_stocks]
+                
+                stats = {
+                    'Cluster': cluster,
+                    'Stocks': cluster_stocks,
+                    'Count': len(cluster_stocks),
+                    'Avg_Return': cluster_returns.mean().mean(),
+                    'Avg_Volatility': cluster_returns.std().mean(),
+                }
+                
+                # Calculate Sharpe ratio safely
+                avg_vol = stats['Avg_Volatility']
+                if avg_vol > 0:
+                    stats['Sharpe_Ratio'] = stats['Avg_Return'] / avg_vol
+                else:
+                    stats['Sharpe_Ratio'] = 0
+                
+                # Calculate max drawdown
+                if len(cluster_stocks) > 1:
+                    portfolio_returns = cluster_returns.mean(axis=1)
+                else:
+                    portfolio_returns = cluster_returns.iloc[:, 0]
+                
+                stats['Max_Drawdown'] = self._calculate_max_drawdown(portfolio_returns)
+                cluster_stats.append(stats)
+        
+        return pd.DataFrame(cluster_stats)
+    
+    def _calculate_max_drawdown(self, returns):
+        """Calculate maximum drawdown from returns series"""
+        if returns.empty or returns.isna().all():
+            return 0
+        
+        cumulative = (1 + returns).cumprod()
+        running_max = cumulative.expanding().max()
+        drawdown = (cumulative - running_max) / running_max
+        return drawdown.min()
+    
     def plot_clusters(self, feature_type='returns', figsize=(15, 10)):
         """
         Visualize clustering results
-        
-        Parameters:
-        -----------
-        feature_type : str
-            Type of features to plot
-        figsize : tuple
-            Figure size
         """
-        if self.cluster_labels is None:
-            raise ValueError("Model not fitted. Run fit_clustering first.")
+        if self.cluster_labels is None or len(self.cluster_labels) == 0:
+            print("No clustering results to plot")
+            return
             
         # Prepare features for plotting
         features_df = self.prepare_features(feature_type)
+        
+        if features_df.empty:
+            print("No features available for plotting")
+            return
         
         # Create subplots
         fig, axes = plt.subplots(2, 2, figsize=figsize)
@@ -325,11 +334,12 @@ class StockKShapeClustering:
         ax1 = axes[0, 0]
         colors = plt.cm.Set3(np.linspace(0, 1, self.n_clusters))
         
-        for i, ticker in enumerate(features_df.columns):
-            cluster = self.cluster_labels[i]
-            ax1.plot(features_df.index, features_df[ticker], 
-                    color=colors[cluster], alpha=0.7, linewidth=1)
-            
+        for i, ticker in enumerate(self.valid_tickers):
+            if ticker in features_df.columns:
+                cluster = self.cluster_labels[i]
+                ax1.plot(features_df.index, features_df[ticker], 
+                        color=colors[cluster], alpha=0.7, linewidth=1)
+                
         ax1.set_title('All Time Series by Cluster')
         ax1.set_xlabel('Date')
         ax1.set_ylabel(feature_type.title())
@@ -365,11 +375,10 @@ class StockKShapeClustering:
         # Plot 4: Sample from each cluster
         ax4 = axes[1, 1]
         for cluster in range(self.n_clusters):
-            cluster_stocks = [ticker for i, ticker in enumerate(features_df.columns) 
-                            if self.cluster_labels[i] == cluster]
+            cluster_stocks = [self.valid_tickers[i] for i, label in enumerate(self.cluster_labels) 
+                            if label == cluster]
             
-            if cluster_stocks:
-                # Plot first stock from each cluster as representative
+            if cluster_stocks and cluster_stocks[0] in features_df.columns:
                 sample_stock = cluster_stocks[0]
                 ax4.plot(features_df.index, features_df[sample_stock], 
                         color=colors[cluster], linewidth=2, 
@@ -384,74 +393,53 @@ class StockKShapeClustering:
         plt.tight_layout()
         plt.show()
     
-    def analyze_cluster_performance(self):
+    def save_results(self, base_filename='stock_clustering'):
         """
-        Analyze performance characteristics of each cluster
+        Save clustering results to CSV files
         """
-        if self.cluster_labels is None:
-            raise ValueError("Model not fitted. Run fit_clustering first.")
-            
-        # Calculate returns for performance analysis
-        returns = self.stock_data.pct_change().dropna()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        cluster_stats = []
+        # Save basic results
+        results = self.get_cluster_results()
+        if not results.empty:
+            results_file = f'{base_filename}_results_{timestamp}.csv'
+            results.to_csv(results_file, index=False)
+            print(f"✅ Basic results saved to {results_file}")
         
-        for cluster in range(self.n_clusters):
-            cluster_stocks = [ticker for i, ticker in enumerate(self.stock_data.columns) 
-                            if self.cluster_labels[i] == cluster]
-            
-            if cluster_stocks:
-                cluster_returns = returns[cluster_stocks]
+        # Save performance analysis
+        try:
+            performance = self.analyze_cluster_performance()
+            if not performance.empty:
+                # Save performance summary
+                perf_summary = performance.drop('Stocks', axis=1)  # Remove stocks list for CSV
+                perf_file = f'{base_filename}_performance_{timestamp}.csv'
+                perf_summary.to_csv(perf_file, index=False)
+                print(f"✅ Performance summary saved to {perf_file}")
                 
-                stats = {
-                    'Cluster': cluster,
-                    'Stocks': cluster_stocks,
-                    'Count': len(cluster_stocks),
-                    'Avg_Return': cluster_returns.mean().mean(),
-                    'Avg_Volatility': cluster_returns.std().mean(),
-                    'Sharpe_Ratio': cluster_returns.mean().mean() / cluster_returns.std().mean(),
-                    'Max_Drawdown': self._calculate_max_drawdown(cluster_returns.mean(axis=1))
-                }
+                # Save detailed results with performance metrics
+                detailed_results = results.copy()
                 
-                cluster_stats.append(stats)
+                # Add performance metrics for each stock
+                perf_dict = {}
+                for _, cluster_info in performance.iterrows():
+                    cluster_num = cluster_info['Cluster']
+                    for stock in cluster_info['Stocks']:
+                        perf_dict[stock] = {
+                            'Cluster_Avg_Return': cluster_info['Avg_Return'],
+                            'Cluster_Avg_Volatility': cluster_info['Avg_Volatility'],
+                            'Cluster_Sharpe_Ratio': cluster_info['Sharpe_Ratio'],
+                            'Cluster_Max_Drawdown': cluster_info['Max_Drawdown']
+                        }
+                
+                # Add performance columns
+                for col in ['Cluster_Avg_Return', 'Cluster_Avg_Volatility', 'Cluster_Sharpe_Ratio', 'Cluster_Max_Drawdown']:
+                    detailed_results[col] = detailed_results['Ticker'].map(lambda x: perf_dict.get(x, {}).get(col, None))
+                
+                detailed_file = f'{base_filename}_detailed_{timestamp}.csv'
+                detailed_results.to_csv(detailed_file, index=False)
+                print(f"✅ Detailed results saved to {detailed_file}")
+                
+        except Exception as e:
+            print(f"⚠️  Could not save performance analysis: {e}")
         
-        return pd.DataFrame(cluster_stats)
-    
-    def _calculate_max_drawdown(self, returns):
-        """Calculate maximum drawdown from returns series"""
-        cumulative = (1 + returns).cumprod()
-        running_max = cumulative.expanding().max()
-        drawdown = (cumulative - running_max) / running_max
-        return drawdown.min()
-
-# Example usage
-if __name__ == "__main__":
-    # Example stock tickers
-    tickers = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'META', 'NVDA', 'NFLX', 
-               'JPM', 'JNJ', 'PG', 'KO', 'XOM', 'GE', 'BA']
-    
-    # Initialize clustering
-    clustering = StockKShapeClustering(n_clusters=3)
-    
-    # Fetch data and prepare features
-    stock_data = clustering.fetch_stock_data(tickers, period='1y')
-    features = clustering.prepare_features(feature_type='normalized_prices')
-    
-    # Find optimal clusters (optional)
-    # optimal_k, scores = clustering.find_optimal_clusters()
-    
-    # Fit clustering
-    labels = clustering.fit_clustering()
-    
-    # Get results
-    results = clustering.get_cluster_results()
-    print("\nClustering Results:")
-    print(results)
-    
-    # Visualize results
-    clustering.plot_clusters(feature_type='normalized_prices')
-    
-    # Analyze performance
-    performance = clustering.analyze_cluster_performance()
-    print("\nCluster Performance Analysis:")
-    print(performance[['Cluster', 'Count', 'Avg_Return', 'Avg_Volatility', 'Sharpe_Ratio']])
+        return timestamp
