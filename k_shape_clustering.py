@@ -7,7 +7,6 @@ from tslearn.preprocessing import TimeSeriesScalerMeanVariance
 from tslearn.utils import to_time_series_dataset
 from sklearn.metrics import silhouette_score
 import yfinance as yf
-from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
 

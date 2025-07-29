@@ -261,8 +261,8 @@ def run_optimal_cluster_analysis(sample_size=100, max_clusters=10, period='1y'):
     # Load tickers and sample
     #tickers_df = pd.read_csv('ticker_symbols_only.txt')
     #all_tickers = tickers_df.Ticker.to_list()
-    
-    cache = build_stock_cache('nasdaq_screener.csv', period='1y')
+
+    cache = build_stock_cache('nasdaq_screener.csv', period=period)
     clustering = StockKShapeClusteringWithCache(n_clusters=3, random_state=42)  # Temporary
 
     available_tickers = clustering.cache.get_available_tickers()
@@ -307,7 +307,7 @@ if __name__ == "__main__":
     optimal_k, optimization_results, final_results = run_optimal_cluster_analysis(
         sample_size=3640, 
         max_clusters=25, 
-        period='1y'
+        period='5y'
     )
     
     clustering, results, performance = final_results
