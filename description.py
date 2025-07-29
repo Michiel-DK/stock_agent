@@ -81,11 +81,11 @@ def save_to_json(data, filename="company_descriptions.json"):
 
 def main():
     
-    cluster = 5
+    cluster = 6
     
     import pandas as pd
     # Example list of tickers - replace with your actual list
-    tickers = pd.read_csv('detailed_clusters_20250722_124822.csv')
+    tickers = pd.read_csv('optimal_clustering_results_20250729_155103.csv')
     
     tickers = tickers[tickers['Cluster'] == cluster]['Ticker'].tolist()
     
