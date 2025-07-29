@@ -636,8 +636,8 @@ if __name__ == "__main__":
         cache_file='nasdaq_cache_5y.csv',
         ticker_file='nasdaq_screener.csv',
         sample_size=3400,  # Adjust based on your needs
-        max_clusters=9,
-        min_clusters=7,
+        max_clusters=16,
+        min_clusters=4,
         period='5y',
         start_date='2022-10-12',
         feature_type='normalized_prices'
