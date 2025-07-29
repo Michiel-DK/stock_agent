@@ -30,7 +30,7 @@ def init_chat_model(model_name):
             {{
                 "cluster_name": "Descriptive name for the cluster",
                 "theme": "Brief explanation of what unites these companies",
-                "companies": [1, 2, 3],
+                "companies": ["AAPL", "MSFT", "GOOGL"],
                 "reasoning": "Why these companies belong together"
             }}
         ],
