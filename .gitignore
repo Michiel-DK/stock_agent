@@ -4,3 +4,4 @@
 *.xlsx
 .env
 __pycache__/
+*.json
