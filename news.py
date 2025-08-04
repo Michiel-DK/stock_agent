@@ -39,6 +39,14 @@ def parse_articles(news):
     return articles
 
 def get_extra_info(ticker):
+    """
+    Fetches additional information about the ticker from Yahoo Finance.
+    This includes news articles, summaries, and other relevant data. It then scrapes the full article content from yahoo.
+    Args:
+        ticker (str): Stock ticker symbol
+    Returns:
+        list: List of articles with title, summary, date, URL, and full article content
+        """
     try:
         news = get_yahoo_news(ticker)
         if not news:

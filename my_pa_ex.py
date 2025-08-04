@@ -22,8 +22,7 @@ from langchain_community.tools.requests.tool import RequestsGetTool
 from langchain_community.tools import WikipediaQueryRun
 from langchain_community.utilities import WikipediaAPIWrapper
 
-from description_tool import fetch_company_descriptions
-
+from recipe import get_recipes
 # $CHALLENGIFY_END
 
 ## Configurations
@@ -41,15 +40,10 @@ def get_today() -> str:
     return datetime.today().strftime("%Y-%m-%d")
 # $CHALLENGIFY_END
 
-@tool
-def fetch_descriptions(tickers: list) -> list:
-    """Fetch company descriptions for a list of tickers."""
-    return fetch_company_descriptions(tickers)
-
 # Polygon API
 # $CHALLENGIFY_BEGIN
-# polygon = PolygonAPIWrapper()
-# polygon_toolkit = PolygonToolkit.from_polygon_api_wrapper(polygon)
+polygon = PolygonAPIWrapper()
+polygon_toolkit = PolygonToolkit.from_polygon_api_wrapper(polygon)
 # $CHALLENGIFY_END
 
 # Requests tool
@@ -75,17 +69,27 @@ model = init_chat_model(
 
 ## Instantiate the agent
 # $CHALLENGIFY_BEGIN
-tools = [
+tools = polygon_toolkit.get_tools() + [
     requests_tool,
+    get_recipes,
     get_today,
     wikipedia_tool,
-    fetch_descriptions
 ]
 memory = MemorySaver()
 
 # Set the system prompt
-SYSTEM_PROMPT = """
-    You will receive a list of tickers
+SYSTEM_PROMPT = ""
+SYSTEM_PROMPT += """
+    Always answer in Dutch.
+    """
+SYSTEM_PROMPT += """
+    If your polygon API does not authorize you to get the current price, immediately
+    use the polygon API again but ask it for the last working day's closing price,
+    without asking the user for confirmation.
+    """
+SYSTEM_PROMPT += """
+    If the user asks for a recipe with only one ingredient, immediately use
+    the get_recipes tool. Translate the ingredient to English if it is not in English.
     """
 
 agent_executor = create_react_agent(
