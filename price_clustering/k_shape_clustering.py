@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from tslearn.clustering import KShape
+from tslearn.clustering import KShape, TimeSeriesKMeans
 from tslearn.preprocessing import TimeSeriesScalerMeanVariance
 from tslearn.utils import to_time_series_dataset
 from sklearn.metrics import silhouette_score
@@ -15,7 +15,7 @@ warnings.filterwarnings('ignore')
 class StockKShapeClustering:
     def __init__(self, cache, n_clusters=3, random_state=42):
         """
-        Initialize K-Shape clustering for stock price analysis
+        Initialize clustering for stock price analysis
         
         Parameters:
         -----------
@@ -160,9 +160,15 @@ class StockKShapeClustering:
         print(f"Prepared {feature_type} features for {len(features_df.columns)} tickers")
         return features_df
     
-    def find_optimal_clusters(self, max_clusters=10, min_clusters=2):
+    def find_optimal_clusters(self, max_clusters=10, min_clusters=2, method="kshape", metric="dtw"):
         """
         Find optimal number of clusters using silhouette score
+        
+        Args:
+            max_clusters: Maximum number of clusters to test
+            min_clusters: Minimum number of clusters to test
+            method: Clustering method - "kshape" or "timeserieskmeans"
+            metric: Distance metric for timeserieskmeans - "dtw", "softdtw", or "euclidean"
         """
         if self.features is None or len(self.features) == 0:
             raise ValueError("No features prepared. Run prepare_features() first.")
@@ -180,16 +186,54 @@ class StockKShapeClustering:
         silhouette_scores = []
         cluster_range = range(min_clusters, max_possible_clusters + 1)
         
-        print("Finding optimal number of clusters...")
+        print(f"Finding optimal number of clusters using {method}" + 
+              (f" with {metric} metric..." if method == "timeserieskmeans" else "..."))
+        
         for n_clusters in cluster_range:
-            kshape = KShape(n_clusters=n_clusters, random_state=self.random_state)
-            cluster_labels = kshape.fit_predict(scaled_features)
+            if method == "kshape":
+                model = KShape(n_clusters=n_clusters, random_state=self.random_state)
+                cluster_labels = model.fit_predict(scaled_features)
+                
+                # Standard silhouette score for K-Shape
+                reshaped_features = scaled_features.reshape(scaled_features.shape[0], -1)
+                score = silhouette_score(reshaped_features, cluster_labels)
+                
+            elif method == "timeserieskmeans":
+                model = TimeSeriesKMeans(
+                    n_clusters=n_clusters, 
+                    metric=metric,
+                    random_state=self.random_state,
+                    n_init=3,
+                    max_iter=50
+                )
+                cluster_labels = model.fit_predict(scaled_features)
+                
+                # Calculate silhouette score based on metric
+                if metric in ["dtw", "softdtw"]:
+                    # For DTW metrics, compute distance matrix manually
+                    from tslearn.metrics import dtw_path
+                    n_samples = len(scaled_features)
+                    distance_matrix = np.zeros((n_samples, n_samples))
+                    
+                    for i in range(n_samples):
+                        for j in range(i+1, n_samples):
+                            if metric == "dtw":
+                                dist = dtw_path(scaled_features[i], scaled_features[j])[1]
+                            else:  # softdtw
+                                from tslearn.metrics import soft_dtw
+                                dist = soft_dtw(scaled_features[i], scaled_features[j])
+                            distance_matrix[i, j] = dist
+                            distance_matrix[j, i] = dist
+                    
+                    score = silhouette_score(distance_matrix, cluster_labels, metric='precomputed')
+                else:
+                    # For euclidean, use standard approach
+                    reshaped_features = scaled_features.reshape(scaled_features.shape[0], -1)
+                    score = silhouette_score(reshaped_features, cluster_labels)
+            else:
+                raise ValueError(f"Unknown method: {method}. Use 'kshape' or 'timeserieskmeans'.")
             
-            # Calculate silhouette score
-            reshaped_features = scaled_features.reshape(scaled_features.shape[0], -1)
-            score = silhouette_score(reshaped_features, cluster_labels)
             silhouette_scores.append(score)
-            
             print(f"Clusters: {n_clusters}, Silhouette Score: {score:.3f}")
         
         # Find optimal number of clusters
@@ -198,9 +242,14 @@ class StockKShapeClustering:
         
         return optimal_clusters, silhouette_scores
     
-    def fit_clustering(self, scale_features=True):
+    def fit_clustering(self, scale_features=True, method="kshape", metric="dtw"):
         """
-        Fit K-Shape clustering model
+        Fit clustering model
+        
+        Args:
+            scale_features: Whether to scale features
+            method: Clustering method - "kshape" or "timeserieskmeans"
+            metric: Distance metric for timeserieskmeans - "dtw", "softdtw", or "euclidean"
         """
         if self.features is None or len(self.features) == 0:
             print("WARNING: No valid features available for clustering")
@@ -219,10 +268,26 @@ class StockKShapeClustering:
         else:
             scaled_features = self.features
             
-        # Fit K-Shape model
-        print(f"Fitting K-Shape clustering with {self.n_clusters} clusters...")
-        self.model = KShape(n_clusters=self.n_clusters, random_state=self.random_state)
-        self.cluster_labels = self.model.fit_predict(scaled_features)
+        # Fit clustering model based on method
+        if method == "kshape":
+            print(f"Fitting K-Shape clustering with {self.n_clusters} clusters...")
+            self.model = KShape(n_clusters=self.n_clusters, random_state=self.random_state)
+            self.cluster_labels = self.model.fit_predict(scaled_features)
+            
+        elif method == "timeserieskmeans":
+            print(f"Fitting TimeSeriesKMeans clustering with {self.n_clusters} clusters using {metric} metric...")
+            self.model = TimeSeriesKMeans(
+                n_clusters=self.n_clusters, 
+                metric=metric,
+                random_state=self.random_state,
+                n_init=3,
+                max_iter=50,
+                verbose=True
+            )
+            self.cluster_labels = self.model.fit_predict(scaled_features)
+            
+        else:
+            raise ValueError(f"Unknown method: {method}. Use 'kshape' or 'timeserieskmeans'.")
         
         # Print cluster distribution
         unique, counts = np.unique(self.cluster_labels, return_counts=True)
@@ -328,7 +393,10 @@ class StockKShapeClustering:
         
         # Create subplots
         fig, axes = plt.subplots(2, 2, figsize=figsize)
-        fig.suptitle(f'K-Shape Clustering Results - {feature_type.title()}', fontsize=16)
+        
+        # Determine the method used for title
+        method_name = "K-Shape" if isinstance(self.model, KShape) else "TimeSeriesKMeans"
+        fig.suptitle(f'{method_name} Clustering Results - {feature_type.title()}', fontsize=16)
         
         # Plot 1: All time series colored by cluster
         ax1 = axes[0, 0]
@@ -345,7 +413,7 @@ class StockKShapeClustering:
         ax1.set_ylabel(feature_type.title())
         ax1.grid(True, alpha=0.3)
         
-        # Plot 2: Cluster centroids
+        # Plot 2: Cluster centroids (if available)
         ax2 = axes[0, 1]
         if hasattr(self.model, 'cluster_centers_'):
             for i, centroid in enumerate(self.model.cluster_centers_):
@@ -356,6 +424,10 @@ class StockKShapeClustering:
             ax2.set_ylabel('Normalized Values')
             ax2.legend()
             ax2.grid(True, alpha=0.3)
+        else:
+            ax2.text(0.5, 0.5, 'Centroids not available\nfor this method', 
+                    ha='center', va='center', transform=ax2.transAxes)
+            ax2.set_title('Cluster Centroids')
         
         # Plot 3: Cluster composition
         ax3 = axes[1, 0]
@@ -402,7 +474,7 @@ class StockKShapeClustering:
         # Save basic results
         results = self.get_cluster_results()
         if not results.empty:
-            results_file = f'{base_filename}_results_{timestamp}.csv'
+            results_file = f'output_data/{base_filename}_results_{timestamp}.csv'
             results.to_csv(results_file, index=False)
             print(f"✅ Basic results saved to {results_file}")
         
@@ -412,7 +484,7 @@ class StockKShapeClustering:
             if not performance.empty:
                 # Save performance summary
                 perf_summary = performance.drop('Stocks', axis=1)  # Remove stocks list for CSV
-                perf_file = f'{base_filename}_performance_{timestamp}.csv'
+                perf_file = f'output_data/{base_filename}_performance_{timestamp}.csv'
                 perf_summary.to_csv(perf_file, index=False)
                 print(f"✅ Performance summary saved to {perf_file}")
                 
@@ -434,8 +506,8 @@ class StockKShapeClustering:
                 # Add performance columns
                 for col in ['Cluster_Avg_Return', 'Cluster_Avg_Volatility', 'Cluster_Sharpe_Ratio', 'Cluster_Max_Drawdown']:
                     detailed_results[col] = detailed_results['Ticker'].map(lambda x: perf_dict.get(x, {}).get(col, None))
-                
-                detailed_file = f'{base_filename}_detailed_{timestamp}.csv'
+
+                detailed_file = f'output_data/{base_filename}_detailed_{timestamp}.csv'
                 detailed_results.to_csv(detailed_file, index=False)
                 print(f"✅ Detailed results saved to {detailed_file}")
                 

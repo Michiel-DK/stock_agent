@@ -22,7 +22,7 @@ from langchain_community.tools.requests.tool import RequestsGetTool
 from langchain_community.tools import WikipediaQueryRun
 from langchain_community.utilities import WikipediaAPIWrapper
 
-from description_tool import fetch_company_descriptions
+from news import get_extra_info
 
 # $CHALLENGIFY_END
 
@@ -42,9 +42,9 @@ def get_today() -> str:
 # $CHALLENGIFY_END
 
 @tool
-def fetch_descriptions(tickers: list) -> list:
+def get_news(ticker: str) -> list:
     """Fetch company descriptions for a list of tickers."""
-    return fetch_company_descriptions(tickers)
+    return get_extra_info(ticker)
 
 # Polygon API
 # $CHALLENGIFY_BEGIN
@@ -77,15 +77,15 @@ model = init_chat_model(
 # $CHALLENGIFY_BEGIN
 tools = [
     requests_tool,
-    get_today,
     wikipedia_tool,
-    fetch_descriptions
+    get_news
 ]
 memory = MemorySaver()
 
 # Set the system prompt
 SYSTEM_PROMPT = """
-    You will receive a list of tickers
+    You are a financial assistant that helps users with stock market queries.
+    You can look up news articles based on a ticker provided. Use these to answer questions about stocks.
     """
 
 agent_executor = create_react_agent(

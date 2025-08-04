@@ -7,13 +7,14 @@ import random
 from datetime import datetime
 
 # Import our refactored classes
-from clustering.k_shape_cache import StockDataCache
-from clustering.k_shape_clustering import StockKShapeClustering
+from price_clustering.k_shape_cache import StockDataCache
+from price_clustering.k_shape_clustering import StockKShapeClustering
 
 
 def find_optimal_clusters_for_outperformance(cache, tickers, start_date=None, 
                                            max_clusters=10, min_clusters=4, 
-                                           feature_type='normalized_prices'):
+                                           feature_type='normalized_prices',
+                                           method="kshape", metric="dtw"):
     """
     Find optimal number of clusters focused on identifying outperforming groups
     
@@ -31,9 +32,14 @@ def find_optimal_clusters_for_outperformance(cache, tickers, start_date=None,
         Minimum number of clusters to test
     feature_type : str
         Type of features to use for clustering
+    method : str
+        Clustering method - "kshape" or "timeserieskmeans"
+    metric : str
+        Distance metric for timeserieskmeans - "dtw", "softdtw", or "euclidean"
     """
     
-    print("=== FINDING OPTIMAL CLUSTERS FOR OUTPERFORMANCE ===")
+    method_display = f"{method}" + (f"_{metric}" if method == "timeserieskmeans" else "")
+    print(f"=== FINDING OPTIMAL CLUSTERS FOR OUTPERFORMANCE ({method_display.upper()}) ===")
     
     # Load stock data
     stock_data = cache.get_data(tickers=tickers, start_date=start_date)
@@ -71,8 +77,8 @@ def find_optimal_clusters_for_outperformance(cache, tickers, start_date=None,
                 print(f"Skipping {n_clusters} clusters - no valid features")
                 continue
             
-            # Fit clustering
-            labels = clustering.fit_clustering()
+            # Fit clustering with specified method
+            labels = clustering.fit_clustering(method=method, metric=metric)
             
             if len(labels) == 0:
                 print(f"Skipping {n_clusters} clusters - clustering failed")
@@ -153,6 +159,8 @@ def find_optimal_clusters_for_outperformance(cache, tickers, start_date=None,
             
             result = {
                 'n_clusters': n_clusters,
+                'method': method,
+                'metric': metric if method == "timeserieskmeans" else "N/A",
                 'best_cluster_return': best_cluster_return,
                 'best_cluster_sharpe': best_cluster_sharpe,
                 'worst_cluster_return': worst_cluster_return,
@@ -195,6 +203,8 @@ def find_optimal_clusters_for_outperformance(cache, tickers, start_date=None,
     
     print(f"\n=== OPTIMAL CLUSTER RECOMMENDATIONS ===")
     print(f"🎯 Best for Outperformance: {best_outperformance['n_clusters']} clusters")
+    print(f"   - Method: {best_outperformance['method']}" + 
+          (f" ({best_outperformance['metric']})" if best_outperformance['method'] == "timeserieskmeans" else ""))
     print(f"   - Outperformance Score: {best_outperformance['outperformance_score']:.2f}")
     print(f"   - Best Cluster Return: {best_outperformance['best_cluster_return']*100:.2f}%")
     print(f"   - {best_outperformance['outperforming_clusters_count']}/{best_outperformance['n_clusters']} clusters outperform market")
@@ -205,17 +215,17 @@ def find_optimal_clusters_for_outperformance(cache, tickers, start_date=None,
     print(f"   - Valid stocks: {best_spread['valid_stocks']}")
     
     # Plot results
-    plot_cluster_optimization_results(results_df, market_return)
+    plot_cluster_optimization_results(results_df, market_return, method_display)
     
     return int(best_outperformance['n_clusters']), results_df, stock_data
 
 
-def plot_cluster_optimization_results(results_df, market_return):
+def plot_cluster_optimization_results(results_df, market_return, method_display):
     """
     Plot cluster optimization results
     """
     fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-    fig.suptitle('Cluster Optimization for Outperformance Analysis', fontsize=16)
+    fig.suptitle(f'Cluster Optimization for Outperformance Analysis ({method_display.upper()})', fontsize=16)
     
     x = results_df['n_clusters']
     
@@ -276,9 +286,9 @@ def plot_cluster_optimization_results(results_df, market_return):
     plt.show()
 
 
-def analyze_optimal_clusters(clustering, results, performance, n_clusters):
+def analyze_optimal_clusters(clustering, results, performance, n_clusters, method, metric):
     """
-    Analyze the results from optimal clustering
+    Analyze the results from optimal clustering - showing only top 3 performing clusters
     
     Parameters:
     -----------
@@ -290,12 +300,23 @@ def analyze_optimal_clusters(clustering, results, performance, n_clusters):
         Cluster performance metrics
     n_clusters : int
         Number of clusters used
+    method : str
+        Clustering method used
+    metric : str
+        Distance metric used (if applicable)
     """
     try:
-        print(f"\n=== DETAILED CLUSTER ANALYSIS ({n_clusters} CLUSTERS) ===")
-        print("\nCluster Performance Summary:")
+        method_display = f"{method}" + (f"_{metric}" if method == "timeserieskmeans" else "")
+        print(f"\n=== DETAILED CLUSTER ANALYSIS ({n_clusters} CLUSTERS - {method_display.upper()}) ===")
+        
+        # Show only summary table first
+        print("\nAll Clusters Performance Summary:")
         display_cols = ['Cluster', 'Count', 'Avg_Return', 'Avg_Volatility', 'Sharpe_Ratio']
-        print(performance[display_cols].round(4))
+        performance_display = performance[display_cols].copy()
+        performance_display['Avg_Return'] = performance_display['Avg_Return'] * 100  # Convert to percentage
+        performance_display['Avg_Volatility'] = performance_display['Avg_Volatility'] * 100
+        performance_display = performance_display.round(3)
+        print(performance_display.to_string(index=False))
         
         # Calculate individual stock returns for detailed analysis
         stock_returns = {}
@@ -321,23 +342,28 @@ def analyze_optimal_clusters(clustering, results, performance, n_clusters):
                         'total_return': total_return
                     }
         
-        # Show stocks in each cluster with individual performance
-        print(f"\nDetailed Cluster Analysis:")
-        for _, cluster_info in performance.iterrows():
+        # Get top 3 performing clusters by average return
+        top_3_clusters = performance.nlargest(3, 'Avg_Return')
+        
+        print(f"\n=== TOP 3 PERFORMING CLUSTERS (Detailed Analysis) ===")
+        
+        for rank, (_, cluster_info) in enumerate(top_3_clusters.iterrows(), 1):
             cluster_num = cluster_info['Cluster']
             stocks = cluster_info['Stocks']
-            print(f"\n--- Cluster {cluster_num} ({cluster_info['Count']} stocks) ---")
+            
+            print(f"\n🏆 RANK {rank} - Cluster {cluster_num} ({cluster_info['Count']} stocks)")
+            print(f"{'='*60}")
             print(f"Cluster Metrics:")
             print(f"  Average Return: {cluster_info['Avg_Return']:.4f} ({cluster_info['Avg_Return']*100:.2f}%)")
             print(f"  Average Volatility: {cluster_info['Avg_Volatility']:.4f} ({cluster_info['Avg_Volatility']*100:.2f}%)")
             print(f"  Sharpe Ratio: {cluster_info['Sharpe_Ratio']:.4f}")
             print(f"  Max Drawdown: {cluster_info['Max_Drawdown']:.4f} ({cluster_info['Max_Drawdown']*100:.2f}%)")
             
-            print(f"\nIndividual Stock Performance:")
-            print(f"{'Ticker':<8} {'Avg Daily':<10} {'Total Return':<12} {'Volatility':<10} {'Sharpe':<8}")
-            print(f"{'='*8} {'='*10} {'='*12} {'='*10} {'='*8}")
+            print(f"\nTop Individual Stock Performers in this Cluster:")
+            print(f"{'Ticker':<8} {'Total Return':<12} {'Avg Daily':<10} {'Volatility':<10} {'Sharpe':<8}")
+            print(f"{'='*8} {'='*12} {'='*10} {'='*10} {'='*8}")
             
-            # Sort stocks by total return (descending)
+            # Sort stocks by total return (descending) and show top 10
             stocks_with_returns = []
             for ticker in stocks:
                 if ticker in stock_returns:
@@ -350,58 +376,50 @@ def analyze_optimal_clusters(clustering, results, performance, n_clusters):
                         'sharpe_ratio': 0
                     }))
             
-            # Sort by total return
+            # Sort by total return and show top performers
             stocks_with_returns.sort(key=lambda x: x[1]['total_return'], reverse=True)
+            top_stocks_to_show = min(10, len(stocks_with_returns))  # Show top 10 or all if less
             
-            for ticker, metrics in stocks_with_returns:
-                print(f"{ticker:<8} {metrics['avg_daily_return']*100:>9.2f}% "
-                      f"{metrics['total_return']*100:>11.1f}% "
+            for i, (ticker, metrics) in enumerate(stocks_with_returns[:top_stocks_to_show]):
+                print(f"{ticker:<8} {metrics['total_return']*100:>11.1f}% "
+                      f"{metrics['avg_daily_return']*100:>9.2f}% "
                       f"{metrics['volatility']*100:>9.2f}% "
                       f"{metrics['sharpe_ratio']:>7.3f}")
             
-            # Show best and worst performers in cluster
-            if len(stocks_with_returns) > 1:
-                best_stock, best_metrics = stocks_with_returns[0]
-                worst_stock, worst_metrics = stocks_with_returns[-1]
-                print(f"\n  🏆 Best Performer: {best_stock} ({best_metrics['total_return']*100:.1f}% total return)")
-                print(f"  📉 Worst Performer: {worst_stock} ({worst_metrics['total_return']*100:.1f}% total return)")
+            if len(stocks_with_returns) > top_stocks_to_show:
+                print(f"   ... and {len(stocks_with_returns) - top_stocks_to_show} more stocks")
                 
         # Calculate and print overall averages
-        print(f"\n--- Overall Portfolio Averages ---")
+        print(f"\n=== OVERALL PORTFOLIO SUMMARY ===")
         print(f"Average Return: {performance['Avg_Return'].mean():.4f} ({performance['Avg_Return'].mean()*100:.2f}%)")
         print(f"Average Volatility: {performance['Avg_Volatility'].mean():.4f} ({performance['Avg_Volatility'].mean()*100:.2f}%)")
         print(f"Average Sharpe Ratio: {performance['Sharpe_Ratio'].mean():.4f}")
         print(f"Average Max Drawdown: {performance['Max_Drawdown'].mean():.4f} ({performance['Max_Drawdown'].mean()*100:.2f}%)")
         
-        # Show top and bottom performers across all clusters
+        # Show top individual performers across all clusters
         if stock_returns:
-            print(f"\n--- Top 5 Individual Stock Performers ---")
+            print(f"\n=== TOP 10 INDIVIDUAL STOCK PERFORMERS (All Clusters) ===")
             all_stocks_sorted = sorted(stock_returns.items(), key=lambda x: x[1]['total_return'], reverse=True)
-            for i, (ticker, metrics) in enumerate(all_stocks_sorted[:5]):
+            for i, (ticker, metrics) in enumerate(all_stocks_sorted[:10]):
                 cluster_num = results[results['Ticker'] == ticker]['Cluster'].iloc[0] if ticker in results['Ticker'].values else 'N/A'
-                print(f"{i+1}. {ticker} (Cluster {cluster_num}): {metrics['total_return']*100:.1f}% total, "
-                      f"Sharpe: {metrics['sharpe_ratio']:.3f}")
-            
-            print(f"\n--- Bottom 5 Individual Stock Performers ---")
-            for i, (ticker, metrics) in enumerate(all_stocks_sorted[-5:]):
-                cluster_num = results[results['Ticker'] == ticker]['Cluster'].iloc[0] if ticker in results['Ticker'].values else 'N/A'
-                print(f"{len(all_stocks_sorted)-4+i}. {ticker} (Cluster {cluster_num}): {metrics['total_return']*100:.1f}% total, "
-                      f"Sharpe: {metrics['sharpe_ratio']:.3f}")
+                print(f"{i+1:2d}. {ticker:<6} (Cluster {cluster_num}): {metrics['total_return']*100:>6.1f}% total, "
+                      f"Sharpe: {metrics['sharpe_ratio']:>6.3f}")
         
     except Exception as e:
         print(f"Performance analysis failed: {e}")
         import traceback
         traceback.print_exc()
     
-    # Enhanced results saving with individual stock performance
+    # Enhanced results saving with method in filename
     try:
-        timestamp = _save_enhanced_results(clustering, results, performance, stock_returns)
+        method_str = f"{method}" + (f"_{metric}" if method == "timeserieskmeans" else "")
+        timestamp = _save_enhanced_results(clustering, results, performance, stock_returns, method_str)
         print(f"✅ Enhanced results saved with timestamp: {timestamp}")
     except Exception as e:
         print(f"⚠️  Could not save enhanced results: {e}")
         # Fallback to basic save
         try:
-            timestamp = clustering.save_results(base_filename='optimal_clustering')
+            timestamp = clustering.save_results(base_filename=f'optimal_clustering_{method_str}')
             print(f"✅ Basic results saved with timestamp: {timestamp}")
         except Exception as e2:
             print(f"⚠️  Could not save results: {e2}")
@@ -415,17 +433,20 @@ def analyze_optimal_clusters(clustering, results, performance, n_clusters):
         print(f"⚠️  Visualization failed: {e}")
     
     print(f"\n🎉 OPTIMAL CLUSTERING ANALYSIS COMPLETED!")
-    print(f"📊 {len(results)} stocks clustered into {n_clusters} optimal clusters")
+    print(f"📊 {len(results)} stocks clustered into {n_clusters} optimal clusters using {method_str.upper()}")
 
 
-def _save_enhanced_results(clustering, results, performance, stock_returns):
+def _save_enhanced_results(clustering, results, performance, stock_returns, method_str):
     """
-    Save enhanced results with individual stock performance
+    Save enhanced results with individual stock performance and method in filename
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     # Create enhanced results DataFrame
     enhanced_results = results.copy()
+    
+    # Add method information
+    enhanced_results['Method'] = method_str
     
     # Add individual stock metrics
     for ticker in enhanced_results['Ticker']:
@@ -455,13 +476,14 @@ def _save_enhanced_results(clustering, results, performance, stock_returns):
             enhanced_results.loc[mask, metric_name] = metric_value
     
     # Save enhanced results
-    enhanced_file = f'optimal_clustering_enhanced_{timestamp}.csv'
+    enhanced_file = f'output_data/optimal_clustering_{method_str}_enhanced_{timestamp}.csv'
     enhanced_results.to_csv(enhanced_file, index=False)
     print(f"✅ Enhanced results saved to {enhanced_file}")
     
     # Save cluster performance summary
-    perf_summary = performance.drop('Stocks', axis=1, errors='ignore')
-    perf_file = f'optimal_clustering_performance_{timestamp}.csv'
+    perf_summary = performance.drop('Stocks', axis=1, errors='ignore').copy()
+    perf_summary['Method'] = method_str
+    perf_file = f'output_data/optimal_clustering_{method_str}_performance_{timestamp}.csv'
     perf_summary.to_csv(perf_file, index=False)
     print(f"✅ Performance summary saved to {perf_file}")
     
@@ -473,6 +495,7 @@ def _save_enhanced_results(clustering, results, performance, stock_returns):
             stock_ranking.append({
                 'Ticker': ticker,
                 'Cluster': cluster_num,
+                'Method': method_str,
                 'Avg_Daily_Return': metrics['avg_daily_return'],
                 'Total_Return': metrics['total_return'],
                 'Volatility': metrics['volatility'],
@@ -483,7 +506,7 @@ def _save_enhanced_results(clustering, results, performance, stock_returns):
         ranking_df = ranking_df.sort_values('Total_Return', ascending=False)
         ranking_df['Rank'] = range(1, len(ranking_df) + 1)
         
-        ranking_file = f'optimal_clustering_stock_ranking_{timestamp}.csv'
+        ranking_file = f'output_data/optimal_clustering_{method_str}_stock_ranking_{timestamp}.csv'
         ranking_df.to_csv(ranking_file, index=False)
         print(f"✅ Stock performance ranking saved to {ranking_file}")
     
@@ -497,7 +520,9 @@ def run_optimal_cluster_analysis(cache_file='stock_data_5y.csv',
                                 min_clusters=4,
                                 period='5y',
                                 start_date='2022-01-01',
-                                feature_type='normalized_prices'):
+                                feature_type='normalized_prices',
+                                method="kshape",
+                                metric="dtw"):
     """
     Complete workflow to find optimal clusters and run analysis
     
@@ -519,8 +544,13 @@ def run_optimal_cluster_analysis(cache_file='stock_data_5y.csv',
         Start date for analysis
     feature_type : str
         Feature type for clustering
+    method : str
+        Clustering method - "kshape" or "timeserieskmeans"
+    metric : str
+        Distance metric for timeserieskmeans - "dtw", "softdtw", or "euclidean"
     """
-    print("=== RUNNING OPTIMAL CLUSTER ANALYSIS ===")
+    method_display = f"{method}" + (f"_{metric}" if method == "timeserieskmeans" else "")
+    print(f"=== RUNNING OPTIMAL CLUSTER ANALYSIS ({method_display.upper()}) ===")
     
     # Step 1: Initialize cache
     cache = StockDataCache(cache_file)
@@ -573,7 +603,9 @@ def run_optimal_cluster_analysis(cache_file='stock_data_5y.csv',
         start_date=start_date,
         max_clusters=max_clusters,
         min_clusters=min_clusters,
-        feature_type=feature_type
+        feature_type=feature_type,
+        method=method,
+        metric=metric
     )
     
     if optimal_k is None:
@@ -581,7 +613,7 @@ def run_optimal_cluster_analysis(cache_file='stock_data_5y.csv',
         return None, None, None
     
     # Step 4: Run final analysis with optimal clusters
-    print(f"\n=== RUNNING FINAL ANALYSIS WITH {optimal_k} CLUSTERS ===")
+    print(f"\n=== RUNNING FINAL ANALYSIS WITH {optimal_k} CLUSTERS ({method_display.upper()}) ===")
     
     # Initialize clustering with optimal parameters
     clustering = StockKShapeClustering(cache, n_clusters=optimal_k, random_state=42)
@@ -594,21 +626,22 @@ def run_optimal_cluster_analysis(cache_file='stock_data_5y.csv',
         print("No valid features for final analysis")
         return optimal_k, results_df, None
     
-    labels = clustering.fit_clustering()
+    labels = clustering.fit_clustering(method=method, metric=metric)
     results = clustering.get_cluster_results()
     performance = clustering.analyze_cluster_performance()
     
     # Step 5: Detailed analysis
-    analyze_optimal_clusters(clustering, results, performance, optimal_k)
+    analyze_optimal_clusters(clustering, results, performance, optimal_k, method, metric)
     
     return optimal_k, results_df, (clustering, results, performance)
 
 
-def run_quick_optimization_test():
+def run_quick_optimization_test(method="kshape", metric="dtw"):
     """
     Quick test with small sample size
     """
-    print("=== QUICK OPTIMIZATION TEST ===")
+    method_display = f"{method}" + (f"_{metric}" if method == "timeserieskmeans" else "")
+    print(f"=== QUICK OPTIMIZATION TEST ({method_display.upper()}) ===")
     
     # Use small sample for quick testing
     optimal_k, optimization_results, final_results = run_optimal_cluster_analysis(
@@ -617,12 +650,14 @@ def run_quick_optimization_test():
         max_clusters=8,
         min_clusters=3,
         period='2y',
-        start_date='2023-01-01'
+        start_date='2023-01-01',
+        method=method,
+        metric=metric
     )
     
     if final_results is not None:
         clustering, results, performance = final_results
-        print(f"\n✅ Test completed with {optimal_k} optimal clusters")
+        print(f"\n✅ Test completed with {optimal_k} optimal clusters using {method_display.upper()}")
         print(f"📊 Analyzed {len(results)} stocks")
     else:
         print("❌ Test failed")
@@ -631,34 +666,72 @@ def run_quick_optimization_test():
 
 # Example usage
 if __name__ == "__main__":
-    # For full analysis (comment/uncomment as needed)
+    # For full analysis with different methods (choose one)
+    
+    # K-Shape analysis
+    # optimal_k, optimization_results, final_results = run_optimal_cluster_analysis(
+    #     cache_file='cache/nasdaq_cache_5y.csv',
+    #     ticker_file='tickers/nasdaq_screener.csv',
+    #     sample_size=200,  # Adjust based on your needs
+    #     max_clusters=16,
+    #     min_clusters=4,
+    #     period='5y',
+    #     start_date='2022-10-12',
+    #     feature_type='normalized_prices',
+    #     method="kshape"
+    # )
+    
+    # DTW-based TimeSeriesKMeans analysis (recommended for price patterns)
+    # optimal_k, optimization_results, final_results = run_optimal_cluster_analysis(
+    #     cache_file='cache/nasdaq_cache_5y.csv',
+    #     ticker_file='tickers/nasdaq_screener.csv',
+    #     sample_size=3200,
+    #     max_clusters=16,
+    #     min_clusters=4,
+    #     period='5y',
+    #     start_date='2022-10-12',
+    #     feature_type='normalized_prices',
+    #     method="timeserieskmeans",
+    #     metric="dtw"
+    # )
+    
+    # Fast Euclidean-based analysis
     optimal_k, optimization_results, final_results = run_optimal_cluster_analysis(
-        cache_file='nasdaq_cache_5y.csv',
-        ticker_file='nasdaq_screener.csv',
-        sample_size=3400,  # Adjust based on your needs
+        cache_file='cache/nasdaq_cache_5y.csv',
+        ticker_file='tickers/nasdaq_screener.csv',
+        sample_size=3200,
         max_clusters=16,
         min_clusters=4,
         period='5y',
         start_date='2022-10-12',
-        feature_type='normalized_prices'
+        feature_type='normalized_prices',
+        method="timeserieskmeans",
+        metric="euclidean"
     )
     
-    # For quick testing
-    # optimal_k, optimization_results, final_results = run_quick_optimization_test()
+    # For quick testing with different methods
+    # optimal_k, optimization_results, final_results = run_quick_optimization_test(method="kshape")
+    # optimal_k, optimization_results, final_results = run_quick_optimization_test(method="timeserieskmeans", metric="dtw")
     
     if final_results is not None:
-            clustering, results, performance = final_results
-            print(f"\n🎯 FINAL OPTIMAL ANALYSIS COMPLETE!")
-            print(f"Optimal clusters: {optimal_k}")
-            print(f"Stocks analyzed: {len(results)}")
-            
-            # Show optimization results summary
-            if optimization_results is not None:
-                print(f"\nOptimization tested {len(optimization_results)} different cluster counts")
-                print("Top 3 configurations by outperformance score:")
-                top_3 = optimization_results.nlargest(3, 'outperformance_score')
-                for _, row in top_3.iterrows():
-                    print(f"  {row['n_clusters']} clusters: score {row['outperformance_score']:.2f}, "
-                        f"best return {row['best_cluster_return']*100:.2f}%")
+        clustering, results, performance = final_results
+        method_str = f"{clustering.model.__class__.__name__.lower()}"
+        if hasattr(clustering.model, 'metric'):
+            method_str += f"_{clustering.model.metric}"
+        
+        print(f"\n🎯 FINAL OPTIMAL ANALYSIS COMPLETE!")
+        print(f"Method: {method_str.upper()}")
+        print(f"Optimal clusters: {optimal_k}")
+        print(f"Stocks analyzed: {len(results)}")
+        
+        # Show optimization results summary
+        if optimization_results is not None:
+            print(f"\nOptimization tested {len(optimization_results)} different cluster counts")
+            print("Top 3 configurations by outperformance score:")
+            top_3 = optimization_results.nlargest(3, 'outperformance_score')
+            for _, row in top_3.iterrows():
+                method_display = f"{row['method']}" + (f"_{row['metric']}" if row['method'] == "timeserieskmeans" else "")
+                print(f"  {row['n_clusters']} clusters ({method_display}): score {row['outperformance_score']:.2f}, "
+                      f"best return {row['best_cluster_return']*100:.2f}%")
     else:
-            print("❌ Analysis failed")
+        print("❌ Analysis failed")
