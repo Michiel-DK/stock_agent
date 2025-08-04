@@ -1,7 +1,7 @@
 import pandas as pd
 import random
-from k_shape_cache import StockDataCache
-from k_shape_clustering import StockKShapeClustering
+from clustering.k_shape_cache import StockDataCache
+from clustering.k_shape_clustering import StockKShapeClustering
 
 def main():
     """
