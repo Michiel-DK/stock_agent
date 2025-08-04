@@ -46,26 +46,16 @@ def get_news(ticker: str) -> list:
     """Fetch company descriptions for a list of tickers."""
     return get_extra_info(ticker)
 
-# Polygon API
-# $CHALLENGIFY_BEGIN
-# polygon = PolygonAPIWrapper()
-# polygon_toolkit = PolygonToolkit.from_polygon_api_wrapper(polygon)
-# $CHALLENGIFY_END
-
 # Requests tool
-# $CHALLENGIFY_BEGIN
 requests_tool = RequestsGetTool(
     requests_wrapper=TextRequestsWrapper(headers={}), allow_dangerous_requests=True
 )
 # $CHALLENGIFY_END
 
 # Wikipedia tool
-# $CHALLENGIFY_BEGIN
 wikipedia_tool = WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper())
-# $CHALLENGIFY_END
 
 ## Instantiate the Model
-# $CHALLENGIFY_BEGIN
 model = init_chat_model(
     "gemini-2.0-flash",
     model_provider="google_genai",
