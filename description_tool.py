@@ -1,15 +1,21 @@
 from langchain_google_genai import ChatGoogleGenerativeAI
 from datetime import datetime
 import json
+import pandas as pd
 
 
 def init_chat_model(model_name):    
 
-    with open('company_descriptions.json', 'r', encoding='utf-8') as f:
+    with open('description_data/company_descriptions.json', 'r', encoding='utf-8') as f:
             js = json.load(f)
 
     retrieved_docs = [doc['businessSummary'] for doc in js]
+    retrieved_tickers = [doc['ticker'] for doc in js]
+    retrieved_sectors = [doc['sector'] for doc in js]
+    retrieved_industries = [doc['industry'] for doc in js]
     
+    clustering_results = pd.read_csv('output_data/optimal_clustering_enhanced_20250729_164848.csv')
+    retrieved_returns = [clustering_results[clustering_results["Ticker"]==i][['Individual_Total_Return']] for i in retrieved_tickers]
 
     # Initialize the model
     llm = ChatGoogleGenerativeAI(model=model_name)

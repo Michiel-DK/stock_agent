@@ -4,7 +4,7 @@ import os
 from datetime import datetime
 
 class StockDataCache:
-    def __init__(self, cache_file='stock_data_cache.csv'):
+    def __init__(self, cache_file='cache/stock_data_cache.csv'):
         self.cache_file = cache_file
         self.metadata_file = cache_file.replace('.csv', '_metadata.csv')
         self.data = None

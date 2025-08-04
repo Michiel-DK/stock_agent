@@ -1,7 +1,7 @@
 import pandas as pd
 import random
-from clustering.k_shape_cache import StockDataCache
-from clustering.k_shape_clustering import StockKShapeClustering
+from price_clustering.k_shape_cache import StockDataCache
+from price_clustering.k_shape_clustering import StockKShapeClustering
 
 def main():
     """
@@ -11,7 +11,7 @@ def main():
     
     # Step 1: Initialize cache
     print("\n1. Initializing cache...")
-    cache = StockDataCache(cache_file='stock_data_5y.csv')
+    cache = StockDataCache(cache_file='cache/stock_data_5y.csv')
     
     # Check if cache exists, if not build it
     cache_info = cache.get_cache_info()
@@ -20,7 +20,7 @@ def main():
         
         # Load tickers from file (adjust path as needed)
         try:
-            tickers_df = pd.read_csv('nasdaq_screener.csv')  # or ticker_symbols_only.txt
+            tickers_df = pd.read_csv('tickers/nasdaq_screener.csv')  # or ticker_symbols_only.txt
             tickers = tickers_df['Symbol'].tolist()  # adjust column name as needed
             print(f"Found {len(tickers)} tickers to cache")
             
@@ -147,7 +147,7 @@ def demo_cache_operations():
     print("=== CACHE OPERATIONS DEMO ===")
     
     # Initialize cache
-    cache = StockDataCache('demo_cache.csv')
+    cache = StockDataCache('cache/demo_cache.csv')
     
     # Add some sample tickers
     sample_tickers = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA']
@@ -186,7 +186,7 @@ def run_clustering_experiment():
     print("=== CLUSTERING EXPERIMENT ===")
     
     # Initialize cache
-    cache = StockDataCache('stock_data_5y.csv')
+    cache = StockDataCache('cache/stock_data_5y.csv')
     
     # Load some sample data if cache is empty
     if cache.get_cache_info()['status'] == 'empty':
