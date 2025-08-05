@@ -11,7 +11,7 @@ def main():
     
     # Step 1: Initialize cache
     print("\n1. Initializing cache...")
-    cache = StockDataCache(cache_file='cache/stock_data_5y.csv')
+    cache = StockDataCache(cache_file='cache/nasdaq_cache_5y.csv')
     
     # Check if cache exists, if not build it
     cache_info = cache.get_cache_info()
