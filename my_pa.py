@@ -23,6 +23,7 @@ from langchain_community.tools import WikipediaQueryRun
 from langchain_community.utilities import WikipediaAPIWrapper
 
 from news import get_extra_info
+from sql_db.csv_db import FinancialDatabaseTool
 
 # $CHALLENGIFY_END
 
@@ -43,8 +44,46 @@ def get_today() -> str:
 
 @tool
 def get_news(ticker: str) -> list:
-    """Fetch company descriptions for a list of tickers."""
+    """Fetch recent new articles for a list of tickers."""
     return get_extra_info(ticker)
+
+# Initialize database tool (you might want to do this once globally)
+db_tool = FinancialDatabaseTool()
+
+@tool
+def sql_query(query: str) -> str:
+    """Execute SQL queries on financial database. 
+    Contains tables: 
+    - stock_analysis: ticker, cluster_price, method, avg_daily_return, total_return, volatility, sharpe_ratio, rank
+    - cluster_summary: cluster_price, count, avg_return, avg_volatility, sharpe_ratio, max_drawdown, method  
+    - company_descriptions: ticker, description, cluster_description
+    
+    Note: cluster_price (price-based clustering) and cluster_description (description-based clustering) are different clustering methods.
+    Examples: 
+        - SELECT * FROM stock_analysis WHERE ticker IN ('AAPL', 'MSFT', 'GOOGL')
+        - SELECT ticker, cluster_price FROM stock_analysis WHERE ticker IN ('AAPL', 'MSFT', 'GOOGL')
+        - SELECT ticker, description, cluster_description FROM company_descriptions WHERE ticker IN ('AAPL', 'MSFT', 'GOOGL')
+        - SELECT sa.ticker, sa.cluster_price, cs.avg_return, cs.max_drawdown FROM stock_analysis sa JOIN cluster_summary cs ON sa.cluster_price = cs.cluster_price WHERE sa.ticker IN ('AAPL', 'MSFT')
+        - SELECT sa.ticker, sa.cluster_price, cd.cluster_description FROM stock_analysis sa JOIN company_descriptions cd ON sa.ticker = cd.ticker WHERE sa.ticker IN ('AAPL', 'MSFT', 'GOOGL')"""
+    return db_tool.query(query)
+
+@tool
+def list_columns(table_name: str) -> str:
+    """List all column names for a specific table."""
+    try:
+        result = db_tool.db.run(f"PRAGMA table_info({table_name})")
+        return f"Columns in {table_name}: {result}"
+    except Exception as e:
+        return f"Error getting columns for {table_name}: {str(e)}"
+
+@tool
+def show_sample_data(table_name: str, limit: int = 3) -> str:
+    """Show sample data from a table to see column names and data types."""
+    try:
+        result = db_tool.db.run(f"SELECT * FROM {table_name} LIMIT {limit}")
+        return f"Sample data from {table_name}:\n{result}"
+    except Exception as e:
+        return f"Error getting sample data: {str(e)}"
 
 # Requests tool
 requests_tool = RequestsGetTool(
@@ -68,15 +107,35 @@ model = init_chat_model(
 tools = [
     requests_tool,
     wikipedia_tool,
-    get_news
+    get_news,
+    sql_query,
+    get_today,
+    list_columns,
+    show_sample_data,
 ]
 memory = MemorySaver()
 
 # Set the system prompt
 SYSTEM_PROMPT = """
-    You are a financial assistant that helps users with stock market queries.
-    You can look up news articles based on a ticker provided. Use these to answer questions about stocks.
-    """
+You are a financial assistant that helps users with stock market queries.
+
+You can:
+- Look up news articles based on a ticker provided
+- Query financial database for stock analysis, cluster data, and company descriptions  
+- Use Wikipedia for general company information
+
+Database workflow:
+1. ALWAYS use database_info(), list_columns(), or show_sample_data() FIRST to see exact column names
+2. Then write SQL queries using the correct column names
+3. Use sql_query() to execute your queries
+
+Available database tables:
+- stock_analysis: contains ticker performance and price-based clustering
+- cluster_summary: contains price cluster statistics  
+- company_descriptions: contains company info and description-based clustering
+
+IMPORTANT: Column names must be exact - check them before querying to avoid errors.
+"""
 
 agent_executor = create_react_agent(
     model, tools, checkpointer=memory, prompt=SYSTEM_PROMPT
@@ -121,3 +180,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

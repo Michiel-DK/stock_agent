@@ -114,38 +114,19 @@ class FinancialDatabaseTool:
 
         print(f"Database setup complete: {self.db_path}")
 
-
-# Initialize database tool
-db_tool = FinancialDatabaseTool()
-
-# Setup database with your CSV files
-csv_files = {
-    "stock_analysis": "stock_data.csv",
-    "cluster_summary": "cluster_data.csv", 
-    "company_descriptions": "company_descriptions.csv"
-}
-db_tool.setup_database(csv_files)
-
-financial_query_tool = Tool(
-    name="sql_query",
-    description="""Execute SQL queries on financial database. 
-    Contains tables: 
-    - stock_analysis: ticker, cluster_price, method, avg_daily_return, total_return, volatility, sharpe_ratio, rank
-    - cluster_summary: cluster_price, count, avg_return, avg_volatility, sharpe_ratio, max_drawdown, method  
-    - company_descriptions: ticker, description, cluster_description
+if __name__ == "__main__":
+    # Example usage
+    db_tool = FinancialDatabaseTool()
     
-    Note: cluster_price (price-based clustering) and cluster_description (description-based clustering) are different clustering methods.
+    # Setup database with your CSV files
+    csv_files = {
+        "stock_analysis": "output_data/optimal_clustering_timeserieskmeans_euclidean_stock_ranking_20250804_224954.csv",
+        "cluster_summary": "output_data/optimal_clustering_timeserieskmeans_euclidean_performance_20250804_224954.csv", 
+        "company_descriptions": "description_data/finbert_cluster_results_company_descriptions_cluster_timeserieskmeans_euclidean_stock_ranking_20250804_224954.csv"
+    }
+    #db_tool.setup_database(csv_files)
     
-    Examples: 
-    - SELECT * FROM stock_analysis WHERE ticker='AAPL' ORDER BY rank LIMIT 5
-    - SELECT sa.ticker, sa.sharpe_ratio, cs.avg_return FROM stock_analysis sa JOIN cluster_summary cs ON sa.cluster_price = cs.cluster_price WHERE sa.ticker='AAPL'
-    - SELECT sa.ticker, sa.cluster_price, cd.cluster_description FROM stock_analysis sa JOIN company_descriptions cd ON sa.ticker = cd.ticker WHERE sa.ticker='AAPL'
-    - SELECT sa.*, cs.max_drawdown FROM stock_analysis sa LEFT JOIN cluster_summary cs ON sa.cluster_price = cs.cluster_price ORDER BY sa.rank LIMIT 10""",
-    func=db_tool.query
-)
-
-schema_tool = Tool(
-    name="database_info", 
-    description="Get information about database tables and their columns",
-    func=lambda x: db_tool.get_schema()
-)
+    # Example query
+    query_result = db_tool.query("SELECT * FROM stock_analysis LIMIT 5;")
+    print(query_result)
+    
