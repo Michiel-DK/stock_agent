@@ -176,8 +176,8 @@ if __name__ == "__main__":
     csv_files = {
         "stock_analysis": "output_data/optimal_clustering_timeserieskmeans_euclidean_stock_ranking_20250804_224954.csv",
         "cluster_summary": "output_data/optimal_clustering_timeserieskmeans_euclidean_performance_20250804_224954.csv", 
-        "company_descriptions": "description_data/company_descriptions_cluster_timeserieskmeans_euclidean_stock_ranking_20250804_224954.csv",
-        "cluster_similarity": "description_data/cluster_similarity_features_company_descriptions_cluster_timeserieskmeans_euclidean_stock_ranking_20250804_224954.csv",
+        "company_descriptions": "description_data/finbert_cluster_results_company_descriptions_cluster_timeserieskmeans_euclidean_stock_ranking_20250804_224954_full.csv",
+        "cluster_similarity": "description_data/cluster_similarity_features_company_descriptions_cluster_timeserieskmeans_euclidean_stock_ranking_20250804_224954_full_new.csv",
     }
     #db_tool.setup_database(csv_files)
     
