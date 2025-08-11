@@ -4,12 +4,15 @@ import numpy as np
 from transformers import AutoTokenizer, AutoModel
 import torch
 from sklearn.cluster import KMeans, HDBSCAN
-from sklearn.metrics import silhouette_score
+from sklearn.metrics import silhouette_score, pairwise_distances
 from sklearn.decomposition import PCA
 import umap.umap_ as umap
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.preprocessing import StandardScaler
+from scipy.spatial.distance import pdist, squareform
+from scipy.cluster.hierarchy import linkage, dendrogram
+import networkx as nx
 
 class FinBERTClusterer:
     def __init__(self, model_name='ProsusAI/finbert'):
@@ -19,6 +22,8 @@ class FinBERTClusterer:
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModel.from_pretrained(model_name)
         self.model.eval()
+        self.cluster_centroids = None
+        self.cluster_distance_matrix = None
         
     def get_embeddings(self, texts, batch_size=16):
         """
@@ -80,12 +85,260 @@ class FinBERTClusterer:
             sil_score = silhouette_score(embeddings_reduced, cluster_labels)
             print(f"Silhouette Score: {sil_score:.3f}")
         
+        # Calculate cluster distance metrics
+        distance_metrics = self._calculate_cluster_distances(embeddings_reduced, cluster_labels)
+        
         return {
             'embeddings': embeddings,
             'embeddings_reduced': embeddings_reduced,
             'cluster_labels': cluster_labels,
-            'clusterer': clusterer
+            'clusterer': clusterer,
+            'distance_metrics': distance_metrics
         }
+    
+    def _calculate_cluster_distances(self, embeddings, cluster_labels):
+        """
+        Calculate various distance metrics between clusters
+        """
+        unique_clusters = [c for c in np.unique(cluster_labels) if c != -1]  # Exclude noise (-1)
+        n_clusters = len(unique_clusters)
+        
+        if n_clusters < 2:
+            return None
+        
+        # 1. Centroid-based distances
+        centroids = []
+        cluster_sizes = []
+        cluster_variances = []
+        
+        for cluster_id in unique_clusters:
+            cluster_points = embeddings[cluster_labels == cluster_id]
+            centroid = np.mean(cluster_points, axis=0)
+            centroids.append(centroid)
+            cluster_sizes.append(len(cluster_points))
+            
+            # Calculate within-cluster variance
+            variance = np.mean(np.sum((cluster_points - centroid) ** 2, axis=1))
+            cluster_variances.append(variance)
+        
+        centroids = np.array(centroids)
+        self.cluster_centroids = centroids
+        
+        # Distance matrix between centroids (Euclidean)
+        centroid_distances = pairwise_distances(centroids, metric='euclidean')
+        
+        # Cosine similarity between centroids
+        centroid_cosine_sim = 1 - pairwise_distances(centroids, metric='cosine')
+        
+        # 2. Minimum distance between clusters (closest points)
+        min_distances = np.full((n_clusters, n_clusters), np.inf)
+        max_distances = np.full((n_clusters, n_clusters), 0)
+        avg_distances = np.full((n_clusters, n_clusters), 0)
+        
+        for i, cluster_i in enumerate(unique_clusters):
+            for j, cluster_j in enumerate(unique_clusters):
+                if i != j:
+                    points_i = embeddings[cluster_labels == cluster_i]
+                    points_j = embeddings[cluster_labels == cluster_j]
+                    
+                    # Calculate all pairwise distances
+                    distances = pairwise_distances(points_i, points_j, metric='euclidean')
+                    
+                    min_distances[i, j] = np.min(distances)
+                    max_distances[i, j] = np.max(distances)
+                    avg_distances[i, j] = np.mean(distances)
+        
+        # 3. Normalized distances (accounting for cluster size and variance)
+        normalized_distances = np.zeros((n_clusters, n_clusters))
+        for i in range(n_clusters):
+            for j in range(n_clusters):
+                if i != j:
+                    # Normalize by average of both cluster variances
+                    norm_factor = np.sqrt(cluster_variances[i] + cluster_variances[j])
+                    normalized_distances[i, j] = centroid_distances[i, j] / (norm_factor + 1e-8)
+        
+        # 4. Weighted distances (accounting for cluster sizes)
+        weighted_distances = np.zeros((n_clusters, n_clusters))
+        for i in range(n_clusters):
+            for j in range(n_clusters):
+                if i != j:
+                    # Weight by harmonic mean of cluster sizes
+                    weight = 2 / (1/cluster_sizes[i] + 1/cluster_sizes[j])
+                    weighted_distances[i, j] = centroid_distances[i, j] * np.log(weight + 1)
+        
+        self.cluster_distance_matrix = centroid_distances
+        
+        return {
+            'unique_clusters': unique_clusters,
+            'centroids': centroids,
+            'cluster_sizes': cluster_sizes,
+            'cluster_variances': cluster_variances,
+            'centroid_distances': centroid_distances,
+            'centroid_cosine_similarity': centroid_cosine_sim,
+            'min_distances': min_distances,
+            'max_distances': max_distances,
+            'avg_distances': avg_distances,
+            'normalized_distances': normalized_distances,
+            'weighted_distances': weighted_distances
+        }
+    
+    def get_cluster_similarity_features(self, results):
+        """
+        Extract features that can be used in ML models to predict cluster similarity
+        """
+        if results['distance_metrics'] is None:
+            return None
+        
+        dm = results['distance_metrics']
+        n_clusters = len(dm['unique_clusters'])
+        
+        features = []
+        cluster_pairs = []
+        
+        for i in range(n_clusters):
+            for j in range(i + 1, n_clusters):  # Only upper triangle
+                cluster_i = dm['unique_clusters'][i]
+                cluster_j = dm['unique_clusters'][j]
+                
+                feature_vector = {
+                    'cluster_i': cluster_i,
+                    'cluster_j': cluster_j,
+                    'centroid_distance': dm['centroid_distances'][i, j],
+                    'cosine_similarity': dm['centroid_cosine_similarity'][i, j],
+                    'min_distance': dm['min_distances'][i, j],
+                    'max_distance': dm['max_distances'][i, j],
+                    'avg_distance': dm['avg_distances'][i, j],
+                    'normalized_distance': dm['normalized_distances'][i, j],
+                    'weighted_distance': dm['weighted_distances'][i, j],
+                    'size_ratio': min(dm['cluster_sizes'][i], dm['cluster_sizes'][j]) / max(dm['cluster_sizes'][i], dm['cluster_sizes'][j]),
+                    'combined_size': dm['cluster_sizes'][i] + dm['cluster_sizes'][j],
+                    'variance_ratio': min(dm['cluster_variances'][i], dm['cluster_variances'][j]) / max(dm['cluster_variances'][i], dm['cluster_variances'][j]),
+                    'combined_variance': dm['cluster_variances'][i] + dm['cluster_variances'][j],
+                }
+                
+                features.append(feature_vector)
+                cluster_pairs.append((cluster_i, cluster_j))
+        
+        return pd.DataFrame(features), cluster_pairs
+    
+    def visualize_cluster_distances(self, results, method='heatmap'):
+        """
+        Visualize cluster distances using various methods
+        """
+        if results['distance_metrics'] is None:
+            print("No distance metrics available")
+            return
+        
+        dm = results['distance_metrics']
+        cluster_labels = [f"Cluster {c}" for c in dm['unique_clusters']]
+        
+        if method == 'heatmap':
+            fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+            
+            # Centroid distances
+            sns.heatmap(dm['centroid_distances'], annot=True, fmt='.3f', 
+                       xticklabels=cluster_labels, yticklabels=cluster_labels,
+                       ax=axes[0, 0], cmap='viridis')
+            axes[0, 0].set_title('Centroid Distances')
+            
+            # Cosine similarity
+            sns.heatmap(dm['centroid_cosine_similarity'], annot=True, fmt='.3f',
+                       xticklabels=cluster_labels, yticklabels=cluster_labels,
+                       ax=axes[0, 1], cmap='RdYlBu')
+            axes[0, 1].set_title('Cosine Similarity')
+            
+            # Normalized distances
+            sns.heatmap(dm['normalized_distances'], annot=True, fmt='.3f',
+                       xticklabels=cluster_labels, yticklabels=cluster_labels,
+                       ax=axes[1, 0], cmap='plasma')
+            axes[1, 0].set_title('Normalized Distances')
+            
+            # Min distances
+            sns.heatmap(dm['min_distances'], annot=True, fmt='.3f',
+                       xticklabels=cluster_labels, yticklabels=cluster_labels,
+                       ax=axes[1, 1], cmap='magma')
+            axes[1, 1].set_title('Minimum Distances')
+            
+            plt.tight_layout()
+            plt.show()
+        
+        elif method == 'dendrogram':
+            # Create dendrogram based on centroid distances
+            condensed_distances = squareform(dm['centroid_distances'])
+            linkage_matrix = linkage(condensed_distances, method='ward')
+            
+            plt.figure(figsize=(10, 6))
+            dendrogram(linkage_matrix, labels=cluster_labels)
+            plt.title('Cluster Dendrogram (Based on Centroid Distances)')
+            plt.ylabel('Distance')
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            plt.show()
+        
+        elif method == 'network':
+            # Create network graph where edge weights represent similarity
+            G = nx.Graph()
+            
+            # Add nodes
+            for i, cluster_id in enumerate(dm['unique_clusters']):
+                G.add_node(cluster_id, size=dm['cluster_sizes'][i])
+            
+            # Add edges (higher similarity = thicker edge)
+            n_clusters = len(dm['unique_clusters'])
+            for i in range(n_clusters):
+                for j in range(i + 1, n_clusters):
+                    similarity = dm['centroid_cosine_similarity'][i, j]
+                    if similarity > 0.1:  # Only show meaningful similarities
+                        G.add_edge(dm['unique_clusters'][i], dm['unique_clusters'][j], 
+                                 weight=similarity)
+            
+            plt.figure(figsize=(10, 8))
+            pos = nx.spring_layout(G, k=1, iterations=50)
+            
+            # Draw nodes
+            node_sizes = [G.nodes[node]['size'] * 100 for node in G.nodes()]
+            nx.draw_networkx_nodes(G, pos, node_size=node_sizes, alpha=0.7)
+            
+            # Draw edges
+            edges = G.edges()
+            weights = [G[u][v]['weight'] * 5 for u, v in edges]
+            nx.draw_networkx_edges(G, pos, width=weights, alpha=0.6)
+            
+            # Draw labels
+            nx.draw_networkx_labels(G, pos)
+            
+            plt.title('Cluster Similarity Network')
+            plt.axis('off')
+            plt.tight_layout()
+            plt.show()
+    
+    def get_most_similar_clusters(self, results, top_k=5):
+        """
+        Get the most similar cluster pairs
+        """
+        features_df, cluster_pairs = self.get_cluster_similarity_features(results)
+        if features_df is None:
+            return None
+        
+        # Sort by cosine similarity (descending) and centroid distance (ascending)
+        features_df['similarity_score'] = (
+            features_df['cosine_similarity'] * 0.6 + 
+            (1 / (1 + features_df['normalized_distance'])) * 0.4
+        )
+        
+        top_similar = features_df.nlargest(top_k, 'similarity_score')
+        
+        print(f"Top {top_k} Most Similar Cluster Pairs:")
+        print("=" * 50)
+        for idx, row in top_similar.iterrows():
+            print(f"Clusters {row['cluster_i']} & {row['cluster_j']}:")
+            print(f"  Similarity Score: {row['similarity_score']:.3f}")
+            print(f"  Cosine Similarity: {row['cosine_similarity']:.3f}")
+            print(f"  Centroid Distance: {row['centroid_distance']:.3f}")
+            print(f"  Normalized Distance: {row['normalized_distance']:.3f}")
+            print("-" * 30)
+        
+        return top_similar
     
     def _find_optimal_clusters(self, embeddings, max_k=15):
         """
@@ -164,44 +417,20 @@ class FinBERTClusterer:
         
         return df
 
-# Example usage
+# Example usage with distance analysis
 def main():
-    # Sample company tickers - replace with your list
-    # tickers = ['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'JPM', 'BAC', 'XOM', 'CVX', 
-    #            'JNJ', 'PFE', 'WMT', 'AMZN', 'META', 'NFLX']
-    
-    # # Fetch company descriptions
-    # print("Fetching company data...")
-    # companies_data = []
-    # descriptions = []
-    # valid_tickers = []
-    
-    # for ticker in tickers:
-    #     try:
-    #         company = yf.Ticker(ticker)
-    #         info = company.info
-    #         if 'longBusinessSummary' in info and info['longBusinessSummary']:
-    #             descriptions.append(info['longBusinessSummary'])
-    #             valid_tickers.append(ticker)
-    #             companies_data.append(info)
-    #     except Exception as e:
-    #         print(f"Error fetching {ticker}: {e}")
-    
-    # print(f"Successfully fetched {len(descriptions)} company descriptions")
-        
     import json
     
     file_name = 'company_descriptions_cluster_timeserieskmeans_euclidean_stock_ranking_20250804_224954.json'
+
+    base_name = file_name.replace('.json', '')  # Remove .json extension for output files
+
 
     with open(f'description_data/{file_name}', 'r', encoding='utf-8') as f:
             js = json.load(f)
     
     valid_tickers = [doc['ticker'] for doc in js if 'ticker' in doc]
     descriptions = [doc['businessSummary'] for doc in js if 'businessSummary' in doc]
-    companies_data = [
-            {k: v for k, v in d.items() if k not in ['ticker', 'businessSummary']}
-            for d in js
-        ]
     
     # Initialize clusterer
     clusterer = FinBERTClusterer()
@@ -210,19 +439,34 @@ def main():
     results = clusterer.cluster_companies(
         descriptions, 
         company_tickers=valid_tickers,
-        use_hdbscan=True,  # Set to False to use K-means
+        use_hdbscan=True,
         reduce_dims=True
     )
     
-    # Analyze results
+    # Analyze clusters
     cluster_df = clusterer.analyze_clusters(results, descriptions, valid_tickers)
     
-    # Visualize
+    # Get similarity features for ML
+    features_df, cluster_pairs = clusterer.get_cluster_similarity_features(results)
+    if features_df is not None:
+        print(f"\nGenerated {len(features_df)} cluster pair features for ML modeling")
+        features_df.to_csv(f'description_data/cluster_similarity_features_{base_name}_full_new.csv', index=False)
+    
+    # Visualize cluster distances
+    clusterer.visualize_cluster_distances(results, method='heatmap')
+    clusterer.visualize_cluster_distances(results, method='dendrogram')
+    clusterer.visualize_cluster_distances(results, method='network')
+    
+    # Get most similar clusters
+    similar_clusters = clusterer.get_most_similar_clusters(results, top_k=5)
+    
+    cluster_df.to_csv(f'description_data/finbert_cluster_results_{base_name}_full.csv', index=False)
+    
+    # Visualize original clusters
     clusterer.visualize_clusters(results, valid_tickers, descriptions)
     
-    cluster_df.to_csv(f'description_data/finbert_cluster_results_{file_name}.csv', index=False)
-
-    return cluster_df, results
+    return cluster_df, results, features_df
 
 if __name__ == "__main__":
-    cluster_df, results = main()
+    cluster_df, results, features_df = main()
+    import ipdb; ipdb.set_trace()  # For debugging purposes 

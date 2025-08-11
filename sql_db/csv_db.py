@@ -89,11 +89,34 @@ class FinancialDatabaseTool:
         );
         """
         
+        # Cluster similarity table
+        cluster_similarity_sql = """
+        CREATE TABLE IF NOT EXISTS cluster_similarity (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cluster_i INTEGER NOT NULL,
+            cluster_j INTEGER NOT NULL,
+            centroid_distance REAL,
+            cosine_similarity REAL,
+            min_distance REAL,
+            max_distance REAL,
+            avg_distance REAL,
+            normalized_distance REAL,
+            weighted_distance REAL,
+            size_ratio REAL,
+            combined_size INTEGER,
+            variance_ratio REAL,
+            combined_variance REAL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+        
         cursor.execute(stock_analysis_sql)
         cursor.execute(cluster_summary_sql)
         cursor.execute(company_descriptions_sql)
+        cursor.execute(cluster_similarity_sql)
         conn.commit()
         conn.close()
+        
         
         print("Created tables: stock_analysis, cluster_summary, company_descriptions")
 
@@ -113,6 +136,37 @@ class FinancialDatabaseTool:
             self.add_csv_to_db(csv_path, table_name)
 
         print(f"Database setup complete: {self.db_path}")
+        
+    def get_similar_clusters_sql(self, cluster_id: int, top_k: int = 5) -> str:
+        """Helper method to generate SQL for finding similar clusters"""
+        return f"""
+        SELECT 
+            CASE 
+                WHEN cluster_i = {cluster_id} THEN cluster_j 
+                ELSE cluster_i 
+            END as similar_cluster,
+            cosine_similarity,
+            centroid_distance,
+            size_ratio
+        FROM cluster_similarity 
+        WHERE cluster_i = {cluster_id} OR cluster_j = {cluster_id}
+        ORDER BY cosine_similarity DESC 
+        LIMIT {top_k};
+        """
+
+    def get_top_similar_pairs_sql(self, top_k: int = 5) -> str:
+        """Helper method to generate SQL for top similar cluster pairs"""
+        return f"""
+        SELECT 
+            cluster_i,
+            cluster_j,
+            cosine_similarity,
+            centroid_distance,
+            combined_size
+        FROM cluster_similarity 
+        ORDER BY cosine_similarity DESC 
+        LIMIT {top_k};
+        """
 
 if __name__ == "__main__":
     # Example usage
@@ -122,7 +176,8 @@ if __name__ == "__main__":
     csv_files = {
         "stock_analysis": "output_data/optimal_clustering_timeserieskmeans_euclidean_stock_ranking_20250804_224954.csv",
         "cluster_summary": "output_data/optimal_clustering_timeserieskmeans_euclidean_performance_20250804_224954.csv", 
-        "company_descriptions": "description_data/finbert_cluster_results_company_descriptions_cluster_timeserieskmeans_euclidean_stock_ranking_20250804_224954.csv"
+        "company_descriptions": "description_data/company_descriptions_cluster_timeserieskmeans_euclidean_stock_ranking_20250804_224954.csv",
+        "cluster_similarity": "description_data/cluster_similarity_features_company_descriptions_cluster_timeserieskmeans_euclidean_stock_ranking_20250804_224954.csv",
     }
     #db_tool.setup_database(csv_files)
     

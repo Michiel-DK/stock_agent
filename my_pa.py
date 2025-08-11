@@ -24,6 +24,7 @@ from langchain_community.utilities import WikipediaAPIWrapper
 
 from news import get_extra_info
 from sql_db.csv_db import FinancialDatabaseTool
+from description_clustering.clusterlookup import ClusterLookupTool
 
 # $CHALLENGIFY_END
 
@@ -84,6 +85,24 @@ def show_sample_data(table_name: str, limit: int = 3) -> str:
         return f"Sample data from {table_name}:\n{result}"
     except Exception as e:
         return f"Error getting sample data: {str(e)}"
+    
+@tool
+def find_similar_clusters(cluster_id: int, top_k: int = 3):
+    """Find clusters similar to cluster_id"""
+    tool = ClusterLookupTool()
+    return tool.get_most_similar_to_cluster(cluster_id, top_k)
+
+@tool
+def get_most_similar_pairs(top_k: int = 5):
+    """Get most similar cluster pairs"""
+    tool = ClusterLookupTool()
+    return tool.get_top_similar_pairs(top_k)
+
+@tool
+def check_clusters(cluster_1: int, cluster_2: int):
+    """Check if two clusters are similar"""
+    tool = ClusterLookupTool()
+    return tool.check_similarity(cluster_1, cluster_2)
 
 # Requests tool
 requests_tool = RequestsGetTool(
@@ -112,6 +131,9 @@ tools = [
     get_today,
     list_columns,
     show_sample_data,
+    find_similar_clusters,
+    get_most_similar_pairs,
+    check_clusters,
 ]
 memory = MemorySaver()
 
@@ -123,6 +145,7 @@ You can:
 - Look up news articles based on a ticker provided
 - Query financial database for stock analysis, cluster data, and company descriptions  
 - Use Wikipedia for general company information
+- Find similar clusters using dedicated tools OR SQL queries
 
 Database workflow:
 1. ALWAYS use database_info(), list_columns(), or show_sample_data() FIRST to see exact column names
@@ -133,6 +156,11 @@ Available database tables:
 - stock_analysis: contains ticker performance and price-based clustering
 - cluster_summary: contains price cluster statistics  
 - company_descriptions: contains company info and description-based clustering
+- cluster_similarity: contains pre-computed similarity scores between all cluster pairs
+
+For cluster similarity queries, you can either:
+- Use dedicated tools: find_similar_clusters(), get_most_similar_pairs(), check_clusters()
+- Or write SQL queries against the cluster_similarity table
 
 IMPORTANT: Column names must be exact - check them before querying to avoid errors.
 """

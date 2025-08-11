@@ -82,7 +82,7 @@ def save_to_json(data, filename="description_data/company_descriptions.json"):
 def main():
     
     #cluster = 6
-    cluster = [10]
+    cluster = [10, 0, 19, 8]
     
     import pandas as pd
     # Example list of tickers - replace with your actual list
