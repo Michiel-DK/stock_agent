@@ -6,7 +6,7 @@ import torch
 from sklearn.cluster import KMeans, HDBSCAN
 from sklearn.metrics import silhouette_score
 from sklearn.decomposition import PCA
-import umap
+import umap.umap_ as umap
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.preprocessing import StandardScaler
@@ -167,27 +167,41 @@ class FinBERTClusterer:
 # Example usage
 def main():
     # Sample company tickers - replace with your list
-    tickers = ['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'JPM', 'BAC', 'XOM', 'CVX', 
-               'JNJ', 'PFE', 'WMT', 'AMZN', 'META', 'NFLX']
+    # tickers = ['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'JPM', 'BAC', 'XOM', 'CVX', 
+    #            'JNJ', 'PFE', 'WMT', 'AMZN', 'META', 'NFLX']
     
-    # Fetch company descriptions
-    print("Fetching company data...")
-    companies_data = []
-    descriptions = []
-    valid_tickers = []
+    # # Fetch company descriptions
+    # print("Fetching company data...")
+    # companies_data = []
+    # descriptions = []
+    # valid_tickers = []
     
-    for ticker in tickers:
-        try:
-            company = yf.Ticker(ticker)
-            info = company.info
-            if 'longBusinessSummary' in info and info['longBusinessSummary']:
-                descriptions.append(info['longBusinessSummary'])
-                valid_tickers.append(ticker)
-                companies_data.append(info)
-        except Exception as e:
-            print(f"Error fetching {ticker}: {e}")
+    # for ticker in tickers:
+    #     try:
+    #         company = yf.Ticker(ticker)
+    #         info = company.info
+    #         if 'longBusinessSummary' in info and info['longBusinessSummary']:
+    #             descriptions.append(info['longBusinessSummary'])
+    #             valid_tickers.append(ticker)
+    #             companies_data.append(info)
+    #     except Exception as e:
+    #         print(f"Error fetching {ticker}: {e}")
     
-    print(f"Successfully fetched {len(descriptions)} company descriptions")
+    # print(f"Successfully fetched {len(descriptions)} company descriptions")
+        
+    import json
+    
+    file_name = 'company_descriptions_cluster_timeserieskmeans_euclidean_stock_ranking_20250804_224954.json'
+
+    with open(f'description_data/{file_name}', 'r', encoding='utf-8') as f:
+            js = json.load(f)
+    
+    valid_tickers = [doc['ticker'] for doc in js if 'ticker' in doc]
+    descriptions = [doc['businessSummary'] for doc in js if 'businessSummary' in doc]
+    companies_data = [
+            {k: v for k, v in d.items() if k not in ['ticker', 'businessSummary']}
+            for d in js
+        ]
     
     # Initialize clusterer
     clusterer = FinBERTClusterer()
@@ -206,8 +220,8 @@ def main():
     # Visualize
     clusterer.visualize_clusters(results, valid_tickers, descriptions)
     
-    import ipdb;ipdb.set_trace()  # For debugging purposes
-    
+    cluster_df.to_csv(f'description_data/finbert_cluster_results_{file_name}.csv', index=False)
+
     return cluster_df, results
 
 if __name__ == "__main__":
