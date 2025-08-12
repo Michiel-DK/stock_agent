@@ -26,6 +26,8 @@ from news import get_extra_info
 from sql_db.csv_db import FinancialDatabaseTool
 from description_clustering.clusterlookup import ClusterLookupTool
 
+import json
+
 # $CHALLENGIFY_END
 
 ## Configurations
@@ -110,8 +112,107 @@ requests_tool = RequestsGetTool(
 )
 # $CHALLENGIFY_END
 
+@tool
+def cluster_companies_by_news(tickers: str) -> str:
+    """
+    Cluster companies based on their recent news articles and business activities.
+    
+    Args:
+        tickers: Comma-separated list of company tickers (e.g. "AAPL,MSFT,GOOGL")
+    
+    Returns:
+        JSON string with clusters based on recent news analysis
+    """
+    ticker_list = [t.strip().upper() for t in tickers.split(',')]
+    
+    # Fetch news for all tickers
+    all_news = {}
+    for ticker in ticker_list:
+        try:
+            all_news[ticker] = get_news.invoke({"ticker": ticker})
+        except Exception as e:
+            all_news[ticker] = f"Error fetching news: {str(e)}"
+    
+    # Create clustering prompt
+    prompt = f"""You are an expert financial analyst. Cluster these companies based on their recent news and business activities.
+
+        COMPANY NEWS DATA:
+        {json.dumps(all_news, indent=2)}
+
+        OUTPUT FORMAT:
+        {{
+            "clusters": [
+                {{
+                    "cluster_name": "Descriptive name",
+                    "theme": "What unites these companies based on news",
+                    "companies": ["AAPL", "MSFT"],
+                    "reasoning": "Why grouped together based on recent activities"
+                }}
+            ],
+            "summary": "Key insights from news-based clustering"
+        }}
+
+        Focus on: recent business moves, industry trends, partnerships, product launches, market focus."""
+
+    try:
+        # Use the same model that's used by the agent
+        response = model.invoke(prompt)
+        return response.content if hasattr(response, 'content') else str(response)
+    except Exception as e:
+        return json.dumps({"error": f"Clustering failed: {str(e)}", "tickers": ticker_list})
+
 # Wikipedia tool
 wikipedia_tool = WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper())
+
+@tool
+def cluster_companies_by_wikipedia(tickers: str) -> str:
+    """
+    Cluster companies based on their Wikipedia information and business descriptions.
+    
+    Args:
+        tickers: Comma-separated list of company tickers (e.g. "AAPL,MSFT,GOOGL")
+    
+    Returns:
+        JSON string with clusters based on Wikipedia business analysis
+    """
+    ticker_list = [t.strip().upper() for t in tickers.split(',')]
+    
+    # Fetch Wikipedia info for all tickers
+    all_wiki_info = {}
+    for ticker in ticker_list:
+        try:
+            # Search for company name + ticker to get better results
+            search_query = f"{ticker} company stock"
+            all_wiki_info[ticker] = wikipedia_tool.invoke({"query": search_query})
+        except Exception as e:
+            all_wiki_info[ticker] = f"Error fetching Wikipedia info: {str(e)}"
+    
+    # Create clustering prompt
+    prompt = f"""You are an expert financial analyst. Cluster these companies based on their Wikipedia business information and descriptions.
+
+COMPANY WIKIPEDIA DATA:
+{json.dumps(all_wiki_info, indent=2)}
+
+OUTPUT FORMAT:
+{{
+    "clusters": [
+        {{
+            "cluster_name": "Descriptive name",
+            "theme": "What unites these companies based on Wikipedia info",
+            "companies": ["AAPL", "MSFT"],
+            "reasoning": "Why grouped together based on business models and industries"
+        }}
+    ],
+    "summary": "Key insights from Wikipedia-based clustering"
+}}
+
+Focus on: industry sectors, business models, target markets, company size, geographic focus, founding history."""
+
+    try:
+        response = model.invoke(prompt)
+        return response.content if hasattr(response, 'content') else str(response)
+    except Exception as e:
+        return json.dumps({"error": f"Clustering failed: {str(e)}", "tickers": ticker_list})
 
 ## Instantiate the Model
 model = init_chat_model(
@@ -134,6 +235,8 @@ tools = [
     find_similar_clusters,
     get_most_similar_pairs,
     check_clusters,
+    cluster_companies_by_news,
+    cluster_companies_by_wikipedia
 ]
 memory = MemorySaver()
 
@@ -143,8 +246,10 @@ You are a financial assistant that helps users with stock market queries.
 
 You can:
 - Look up news articles based on a ticker provided
+- Cluster companies based on these news articles
 - Query financial database for stock analysis, cluster data, and company descriptions  
 - Use Wikipedia for general company information
+- Use Wikipedia company descriptions to cluster companies based on business activities
 - Find similar clusters using dedicated tools OR SQL queries
 
 Database workflow:
@@ -161,6 +266,7 @@ Available database tables:
 For cluster similarity queries, you can either:
 - Use dedicated tools: find_similar_clusters(), get_most_similar_pairs(), check_clusters()
 - Or write SQL queries against the cluster_similarity table
+- Use recent news articles to cluster companies
 
 IMPORTANT: Column names must be exact - check them before querying to avoid errors.
 """
